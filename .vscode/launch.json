@@ -3,6 +3,20 @@
     "configurations": [
         {
             "type": "java",
+            "name": "QianchuanTokenTest",
+            "request": "launch",
+            "mainClass": "com.example.oceanengine.test.QianchuanTokenTest",
+            "projectName": "oceanengine-demo"
+        },
+        {
+            "type": "java",
+            "name": "QianchuanTokenTest",
+            "request": "launch",
+            "mainClass": "com.example.oceanengine.QianchuanTokenTest",
+            "projectName": "oceanengine-demo"
+        },
+        {
+            "type": "java",
             "name": "SuixintuiTokenTest",
             "request": "launch",
             "mainClass": "com.example.oceanengine.SuixintuiTokenTest",
