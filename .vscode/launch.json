@@ -1,0 +1,28 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "name": "SuixintuiTokenTest",
+            "request": "launch",
+            "mainClass": "com.example.oceanengine.SuixintuiTokenTest",
+            "projectName": "oceanengine-demo"
+        },
+        {
+            "type": "java",
+            "name": "QianchuanOrderTest",
+            "request": "launch",
+            "mainClass": "com.example.oceanengine.QianchuanOrderTest",
+            "projectName": "oceanengine-demo"
+        },
+        {
+            "type": "java",
+            "name": "Run OceanEngine",
+            "request": "launch",
+            "mainClass": "com.example.oceanengine.Main",
+            "env": {
+                "ACCESS_TOKEN": "856448aced4b750ddd4c76aaebdcca9568ce5edf"
+            }
+        }
+    ]
+}
