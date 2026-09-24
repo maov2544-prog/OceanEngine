@@ -1,0 +1,54 @@
+server:
+  port: 8080
+
+management:
+  server:
+    address: 127.0.0.1
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      # 仅暴露 UP/DOWN，避免向未鉴权端点泄露订单和轮次信息
+      show-details: never
+
+suixintui:
+  reinvest:
+    api-base-url: https://api.oceanengine.com
+    # 固定的一批千川业务账户 ID（随心推投放账户 id）
+    advertiser-ids:
+      - 1779106144470100
+    # 轮次间隔（毫秒）：每 10 分钟一轮；fixedDelay 语义 = 上一轮结束后再等这么久
+    interval-ms: 600000
+    # 启动后多久执行第一轮（毫秒）
+    initial-delay-ms: 10000
+    # 每次拉取「创建时间近 N 天」的订单
+    window-days: 7
+    # 每单追加金额（元）
+    amount: 200
+    # 追加投放时长（小时），官方允许 24/48/72/96/120/144/168
+    delivery-time: 24
+    # 筛选阈值：净成交 ROI ≥ min-roi
+    min-roi: 2.0
+    # 筛选阈值：整体消耗 / 投放总金额 ≥ min-budget-used-ratio
+    min-budget-used-ratio: 0.5
+    # ROI 口径：OVERALL_PAY_ROI（整体支付）/ SETTLE_ROI（净成交）
+    roi-metric: SETTLE_ROI
+    # 资金安全护栏：PENDING/UNKNOWN 按“可能已经支出”占用额度
+    max-amount-per-order-per-day: 600
+    max-amount-per-advertiser-per-day: 5000
+    max-amount-per-round: 1000
+    max-reinvest-count-per-order-per-day: 3
+    cooldown-minutes: 60
+    # 幂等流水文件（JSONL，重启自动恢复；生产建议改为绝对路径并挂载持久卷）
+    record-store-path: ./data/reinvest-records.jsonl
+    instance-lock-path: ./data/reinvest.lock
+    # ⚠️ 演练模式：true 只打印计划不真实追投；生产部署确认无误后改为 false
+    dry-run: true
+    # 单轮模式：true 时启动后执行一轮即退出（手动验证用，生产保持 false）
+    run-once: false
+
+logging:
+  level:
+    com.example.oceanengine: INFO

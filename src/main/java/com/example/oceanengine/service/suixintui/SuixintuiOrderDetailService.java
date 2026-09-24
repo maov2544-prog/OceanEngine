@@ -6,6 +6,8 @@ import com.bytedance.ads.api.QianchuanAwemeUniPromotionOrderDetailV10Api;
 import com.bytedance.ads.model.QianchuanAwemeUniPromotionOrderDetailV10Response;
 import com.bytedance.ads.model.QianchuanAwemeUniPromotionOrderDetailV10ResponseData;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 /**
  * 随心推全域订单详情服务。
  *
@@ -15,6 +17,10 @@ import com.bytedance.ads.model.QianchuanAwemeUniPromotionOrderDetailV10ResponseD
  * <p>注意：详情接口为「一单一请求」，批量查询时请自行控制数量与频率。</p>
  */
 public class SuixintuiOrderDetailService {
+
+    private static final long MIN_REQUEST_INTERVAL_MILLIS =
+            Long.getLong("suixintui.detail.min-request-interval-ms", 100L);
+    private static final AtomicLong LAST_REQUEST_AT = new AtomicLong();
 
     private final ApiClient apiClient;
     private final String accessToken;
@@ -35,6 +41,7 @@ public class SuixintuiOrderDetailService {
     public QianchuanAwemeUniPromotionOrderDetailV10ResponseData getOrderDetail(
             Long orderId, Long advertiserId) throws ApiException {
 
+        throttle();
         QianchuanAwemeUniPromotionOrderDetailV10Api api =
                 new QianchuanAwemeUniPromotionOrderDetailV10Api();
         api.setApiClient(apiClient);
@@ -56,12 +63,31 @@ public class SuixintuiOrderDetailService {
         return response.getData();
     }
 
+    private static void throttle() {
+        while (true) {
+            long now = System.currentTimeMillis();
+            long previous = LAST_REQUEST_AT.get();
+            long wait = MIN_REQUEST_INTERVAL_MILLIS - (now - previous);
+            if (wait <= 0 && LAST_REQUEST_AT.compareAndSet(previous, now)) {
+                return;
+            }
+            if (wait > 0) {
+                try {
+                    Thread.sleep(wait);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("详情接口限速等待被中断", e);
+                }
+            }
+        }
+    }
+
     /**
      * 查询订单创建时设定的预算（最多投多少钱）。
      *
      * @param orderId      订单 ID
      * @param advertiserId 千川业务账户 ID
-     * @return 预算金额 delivery_setting.amount；订单无投放设置时返回 null
+     * @return 预算金额 delivery_setting.amount，单位元（官方口径）；订单无投放设置时返回 null
      * @throws ApiException 接口错误
      */
     public Long getBudget(Long orderId, Long advertiserId) throws ApiException {
@@ -70,5 +96,32 @@ public class SuixintuiOrderDetailService {
         return data.getDeliverySetting() == null
                 ? null
                 : data.getDeliverySetting().getAmount();
+    }
+
+    /**
+     * 查询订单「投放总金额」= 创建时设定的预算 + 追加金额总和。
+     *
+     * <p>已追投（加预算）的订单，实际投放金额 = delivery_setting.amount
+     * + add_amount_info.add_amount；未追投时 add_amount_info 可能为 null，
+     * 此时等于创建预算。</p>
+     *
+     * @param orderId      订单 ID
+     * @param advertiserId 千川业务账户 ID
+     * @return 投放总金额（单位元，官方口径）；订单无投放设置时返回 null
+     * @throws ApiException 接口错误
+     */
+    public Long getTotalBudget(Long orderId, Long advertiserId) throws ApiException {
+        QianchuanAwemeUniPromotionOrderDetailV10ResponseData data =
+                getOrderDetail(orderId, advertiserId);
+        if (data.getDeliverySetting() == null) {
+            return null;
+        }
+        Long base = data.getDeliverySetting().getAmount();
+        Long add = data.getAddAmountInfo() == null
+                ? null : data.getAddAmountInfo().getAddAmount();
+        if (base == null) {
+            return add;
+        }
+        return add == null ? base : base + add;
     }
 }

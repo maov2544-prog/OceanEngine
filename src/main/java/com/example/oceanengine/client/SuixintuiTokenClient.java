@@ -56,7 +56,6 @@ public class SuixintuiTokenClient {
             throw new RuntimeException(
                     "获取随心推 Token 失败，HTTP 状态码："
                     + response.statusCode()
-                    + "，响应：" + response.body()
             );
         }
 

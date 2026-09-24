@@ -3,61 +3,10 @@
     "configurations": [
         {
             "type": "java",
-            "name": "SuixintuiUniOrderDetailTest",
+            "name": "ReinvestApplication",
             "request": "launch",
-            "mainClass": "com.example.oceanengine.test.suixintui.SuixintuiUniOrderDetailTest",
+            "mainClass": "com.example.oceanengine.launcher.ReinvestApplication",
             "projectName": "oceanengine-demo"
-        },
-        {
-            "type": "java",
-            "name": "SuixintuiUniOrderListTest",
-            "request": "launch",
-            "mainClass": "com.example.oceanengine.test.SuixintuiUniOrderListTest",
-            "projectName": "oceanengine-demo"
-        },
-        {
-            "type": "java",
-            "name": "QianchuanOrderTest",
-            "request": "launch",
-            "mainClass": "com.example.oceanengine.test.QianchuanOrderTest",
-            "projectName": "oceanengine-demo"
-        },
-        {
-            "type": "java",
-            "name": "QianchuanTokenTest",
-            "request": "launch",
-            "mainClass": "com.example.oceanengine.test.QianchuanTokenTest",
-            "projectName": "oceanengine-demo"
-        },
-        {
-            "type": "java",
-            "name": "QianchuanTokenTest",
-            "request": "launch",
-            "mainClass": "com.example.oceanengine.QianchuanTokenTest",
-            "projectName": "oceanengine-demo"
-        },
-        {
-            "type": "java",
-            "name": "SuixintuiTokenTest",
-            "request": "launch",
-            "mainClass": "com.example.oceanengine.SuixintuiTokenTest",
-            "projectName": "oceanengine-demo"
-        },
-        {
-            "type": "java",
-            "name": "QianchuanOrderTest",
-            "request": "launch",
-            "mainClass": "com.example.oceanengine.QianchuanOrderTest",
-            "projectName": "oceanengine-demo"
-        },
-        {
-            "type": "java",
-            "name": "Run OceanEngine",
-            "request": "launch",
-            "mainClass": "com.example.oceanengine.Main",
-            "env": {
-                "ACCESS_TOKEN": "856448aced4b750ddd4c76aaebdcca9568ce5edf"
-            }
         }
     ]
 }

@@ -1,0 +1,10 @@
+target/
+data/
+output/
+outputs/
+cp.txt
+*.log
+*.jsonl
+.env
+.env.*
+!.env.example

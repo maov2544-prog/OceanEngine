@@ -16,8 +16,10 @@ import java.util.List;
  * <p>业务链路（追投动作本身暂不实现）：</p>
  * <ol>
  *   <li>拉取某千川账户下全部「随心推全域-商品订单」；
- *       筛选出 <b>投放中（DELIVERY_OK）且 ROI ≥ 阈值</b>（默认 2.0）的订单；</li>
- *   <li>对筛选结果逐单调用订单详情接口，取创建时设定的投放金额（预算 delivery_setting.amount）；</li>
+ *       筛选出 <b>投放中（DELIVERY_OK）、支持追加预算（support_add_budget=true）
+ *       且 ROI ≥ 阈值</b>（默认 2.0）的订单；</li>
+ *   <li>对筛选结果逐单调用订单详情接口，取<b>投放总金额</b>
+ *       （创建预算 delivery_setting.amount + 追加金额 add_amount_info.add_amount）；</li>
  *   <li>计算「整体消耗 / 投放金额」使用率，筛出 <b>≥ 阈值</b>（默认 80%）的订单，
  *       作为后续追投候选（预算快消耗完且 ROI 达标，适合加预算）。</li>
  * </ol>
@@ -27,7 +29,8 @@ import java.util.List;
  * 本类只做业务筛选编排，不直接调 SDK 接口。</p>
  *
  * <p>注意：ROI 口径可通过 {@link RoiMetric} 选择；详情接口为「一单一请求」，
- * 订单量大时耗时较长，请自行评估。预算单位为分（以官方文档为准）。</p>
+ * 订单量大时耗时较长，请自行评估。金额单位均为元（官方口径：
+ * delivery_setting.amount / add_amount_info.add_amount / stat_cost_for_roi2）。</p>
  */
 public class SuixintuiReinvestCandidateSelector {
 
@@ -46,7 +49,7 @@ public class SuixintuiReinvestCandidateSelector {
         public final String awemeShowId;
         public final Double roi;             // 按所选口径的 ROI
         public final Double statCost;        // 整体消耗（stats_info.stat_cost_for_roi2）
-        public final Long budget;            // 投放金额（创建时设定，delivery_setting.amount）
+        public final Long budget;            // 投放总金额（创建预算+追加金额：delivery_setting.amount + add_amount_info.add_amount）
         public final double budgetUsedRatio; // 整体消耗 / 投放金额
 
         public CandidateOrder(Long orderId, Long adId, String awemeShowId,
@@ -84,16 +87,16 @@ public class SuixintuiReinvestCandidateSelector {
 
     // ==================== 入口 ====================
 
-    /** 默认筛选：投放中 + 整体支付 ROI ≥ 2.0 + 整体消耗/投放金额 ≥ 80% */
+    /** 默认筛选：投放中 + 净成交 ROI ≥ 2.0 + 整体消耗/投放金额 ≥ 80% */
     public List<CandidateOrder> findReinvestCandidates(Long advertiserId) throws ApiException {
-        return findReinvestCandidates(advertiserId, 2.0, 0.8, RoiMetric.OVERALL_PAY_ROI);
+        return findReinvestCandidates(advertiserId, 2.0, 0.8, RoiMetric.SETTLE_ROI);
     }
 
-    /** 指定 ROI 与消耗使用率阈值，ROI 口径默认整体支付 ROI */
+    /** 指定 ROI 与消耗使用率阈值，ROI 口径默认净成交 ROI */
     public List<CandidateOrder> findReinvestCandidates(Long advertiserId,
                                                        double minRoi,
                                                        double minBudgetUsedRatio) throws ApiException {
-        return findReinvestCandidates(advertiserId, minRoi, minBudgetUsedRatio, RoiMetric.OVERALL_PAY_ROI);
+        return findReinvestCandidates(advertiserId, minRoi, minBudgetUsedRatio, RoiMetric.SETTLE_ROI);
     }
 
     /**
@@ -136,32 +139,48 @@ public class SuixintuiReinvestCandidateSelector {
             double minBudgetUsedRatio,
             RoiMetric metric) throws ApiException {
 
-        // 1. 内存筛选：投放中 + ROI ≥ 阈值
+        // 1. 内存筛选：投放中 + 支持追加预算 + ROI ≥ 阈值
         List<QianchuanAwemeUniPromotionOrderGetV10ResponseDataOrderListInner> roiOk =
                 new ArrayList<>();
+        int notSupportBudget = 0;
         for (QianchuanAwemeUniPromotionOrderGetV10ResponseDataOrderListInner o : orders) {
             if (o.getStatus() != QianchuanAwemeUniPromotionOrderGetV10DataOrderListStatus.DELIVERY_OK) {
+                continue;
+            }
+            // 不支持追加预算（追投）的订单直接排除，避免详情循环做无效请求
+            if (o.getSupportAddBudget() == null || !o.getSupportAddBudget()) {
+                notSupportBudget++;
                 continue;
             }
             Double roi = roiOf(o, metric);
             if (roi != null && roi >= minRoi) {
                 roiOk.add(o);
+                // System.out.println("  [INFO] order_id=" + o.getOrderId() + " ROI=" + roi + " 达标");
             }
         }
-        System.out.println("投放中且 ROI ≥ " + minRoi + "（口径 " + metric + "）: " + roiOk.size()
-                + " 条，将对这 " + roiOk.size() + " 条调用详情接口");
+        System.out.println("投放中且支持追投且 ROI ≥ " + minRoi + "（口径 " + metric + "）: " + roiOk.size()
+                + " 条（不支持追投跳过 " + notSupportBudget + " 条），将对这 " + roiOk.size() + " 条调用详情接口");
 
         // 3. 逐单取投放金额（预算），计算整体消耗/投放金额，筛选使用率 ≥ 阈值
         List<CandidateOrder> candidates = new ArrayList<>();
         int detailFailed = 0;
         for (QianchuanAwemeUniPromotionOrderGetV10ResponseDataOrderListInner o : roiOk) {
             try {
-                Long budget = detailService.getBudget(o.getOrderId(), advertiserId);
+                Long budget = detailService.getTotalBudget(o.getOrderId(), advertiserId);
 
                 Double statCost = o.getStatsInfo() == null
                         ? null : o.getStatsInfo().getStatCostForRoi2();
 
                 double usedRatio = calcBudgetUsedRatio(statCost, budget);
+
+                Double roi = roiOf(o, metric);
+                System.out.printf("  [流程] order_id=%s roi=%.2f 整体消耗=%.2f 投放总金额=%s 使用率=%.2f%%%n",
+                        o.getOrderId(),
+                        roi == null ? 0.0 : roi,
+                        statCost == null ? 0.0 : statCost,
+                        budget,
+                        usedRatio * 100);
+
                 if (usedRatio < minBudgetUsedRatio) {
                     continue;
                 }
@@ -170,7 +189,7 @@ public class SuixintuiReinvestCandidateSelector {
                         o.getOrderId(),
                         o.getAdId(),
                         o.getAwemeInfo() == null ? null : o.getAwemeInfo().getAwemeShowId(),
-                        roiOf(o, metric),
+                        roi,
                         statCost,
                         budget,
                         usedRatio));
@@ -198,6 +217,11 @@ public class SuixintuiReinvestCandidateSelector {
         if (s == null) {
             return null;
         }
+        // System.out.println("order_id=" + o.getOrderId() + " 口径 " + metric + " ROI="
+        //         + (metric == RoiMetric.SETTLE_ROI
+        //         ? s.getTotalPrepayAndPaySettleRoi21h()
+        //         : s.getTotalPrepayAndPayOrderRoi2()));
+
         return metric == RoiMetric.SETTLE_ROI
                 ? s.getTotalPrepayAndPaySettleRoi21h()
                 : s.getTotalPrepayAndPayOrderRoi2();

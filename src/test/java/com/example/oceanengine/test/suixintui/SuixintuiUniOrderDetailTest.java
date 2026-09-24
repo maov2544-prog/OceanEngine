@@ -38,11 +38,11 @@ import java.util.List;
  */
 public class SuixintuiUniOrderDetailTest {
 
-    private static final Long DEFAULT_ADVERTISER_ID = 1779106144470100L;
+    private static final Long DEFAULT_ADVERTISER_ID = 1823379540880396L;
 
     /** 追投候选筛选阈值：投放中 + ROI ≥ 2 + 整体消耗/投放金额 ≥ 80% */
     private static final double MIN_ROI = 2.0;
-    private static final double MIN_BUDGET_USED_RATIO = 0.8;
+    private static final double MIN_BUDGET_USED_RATIO = 0.5;
 
     public static void main(String[] args) throws Exception {
         // ========== 1. 初始化 ==========
@@ -60,8 +60,8 @@ public class SuixintuiUniOrderDetailTest {
 
         // ========== 2. 拉取订单列表（只拉一次） ==========
         SuixintuiUniOrderListRequest request = new SuixintuiUniOrderListRequest(advertiserId)
-                .orderCreateStartDate("2026-09-22")
-                .orderCreateEndDate("2026-09-23")
+                .orderCreateStartDate("2026-09-21")
+                .orderCreateEndDate("2026-09-24")
                 .status(QianchuanAwemeUniPromotionOrderGetV10FilteringStatus.DELIVERY_OK)
                 .orderField(QianchuanAwemeUniPromotionOrderGetV10OrderField.STAT_COST_FOR_ROI2);
 
@@ -69,15 +69,18 @@ public class SuixintuiUniOrderDetailTest {
         List<QianchuanAwemeUniPromotionOrderGetV10ResponseDataOrderListInner> orders =
                 service.fetchUniPromotionOrders(request);
         System.out.println("订单列表返回: " + orders.size() + " 条");
+    //     + "净成交roi：" + orders.stream().map(o -> o.getStatsInfo().getTotalPrepayAndPaySettleRoi21h()).toList()
+    // +orders.stream().map(o -> o.getStatsInfo().getStatCostForRoi2()).toList());
+        System.out.println();
 
         // ========== 3. 追投候选筛选（列表版，详情只对 ROI 达标订单调用） ==========
         SuixintuiOrderDetailService detailService = new SuixintuiOrderDetailService(apiClient, token);
-        SuixintuiReinvestCandidateSelector selector =
+        SuixintuiReinvestCandidateSelector selector = 
                 new SuixintuiReinvestCandidateSelector(service, detailService);
-
+        
         System.out.println();
         List<CandidateOrder> candidates = selector.findReinvestCandidates(
-                orders, advertiserId, MIN_ROI, MIN_BUDGET_USED_RATIO, RoiMetric.OVERALL_PAY_ROI);
+                orders, advertiserId, MIN_ROI, MIN_BUDGET_USED_RATIO, RoiMetric.SETTLE_ROI);
 
         // ========== 4. 输出候选 ==========
         System.out.println();

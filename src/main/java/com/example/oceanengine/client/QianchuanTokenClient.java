@@ -58,7 +58,6 @@ public class QianchuanTokenClient {
             throw new RuntimeException(
                     "获取千川 Token 失败，HTTP 状态码："
                     + response.statusCode()
-                    + "，响应：" + response.body()
             );
         }
 
