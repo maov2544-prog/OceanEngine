@@ -1,23 +1,14 @@
-package com.example.oceanengine.service;
+package com.example.oceanengine.service.suixintui;
 
+import com.example.oceanengine.model.SuixintuiUniOrderListRequest;
 import com.bytedance.ads.ApiClient;
 import com.bytedance.ads.ApiException;
 import com.bytedance.ads.api.Oauth2AdvertiserGetApi;
-import com.bytedance.ads.api.QianchuanAwemeOrderGetV10Api;
 import com.bytedance.ads.api.QianchuanAwemeUniPromotionOrderGetV10Api;
 import com.bytedance.ads.api.QianchuanShopAdvertiserListV10Api;
 import com.bytedance.ads.model.Oauth2AdvertiserGetResponse;
 import com.bytedance.ads.model.Oauth2AdvertiserGetResponseData;
 import com.bytedance.ads.model.Oauth2AdvertiserGetResponseDataListInner;
-import com.bytedance.ads.model.QianchuanAwemeOrderGetV10Count;
-import com.bytedance.ads.model.QianchuanAwemeOrderGetV10DataPageInfoHasMore;
-import com.bytedance.ads.model.QianchuanAwemeOrderGetV10Filtering;
-import com.bytedance.ads.model.QianchuanAwemeOrderGetV10FilteringMarketingGoal;
-import com.bytedance.ads.model.QianchuanAwemeOrderGetV10OrderField;
-import com.bytedance.ads.model.QianchuanAwemeOrderGetV10Response;
-import com.bytedance.ads.model.QianchuanAwemeOrderGetV10ResponseData;
-import com.bytedance.ads.model.QianchuanAwemeOrderGetV10ResponseDataListInner;
-import com.bytedance.ads.model.QianchuanAwemeOrderGetV10ResponseDataPageInfo;
 import com.bytedance.ads.model.QianchuanAwemeUniPromotionOrderGetV10Count;
 import com.bytedance.ads.model.QianchuanAwemeUniPromotionOrderGetV10DataPageInfoHasMore;
 import com.bytedance.ads.model.QianchuanAwemeUniPromotionOrderGetV10Filtering;
@@ -31,41 +22,24 @@ import com.bytedance.ads.model.QianchuanShopAdvertiserListV10Response;
 import com.bytedance.ads.model.QianchuanShopAdvertiserListV10ResponseData;
 import com.bytedance.ads.model.QianchuanShopAdvertiserListV10ResponseDataAdvIdListInner;
 
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 千川随心推订单拉取服务（统一入口）。
+ * 千川随心推订单拉取服务（统一入口，仅「随心推全域-商品订单」）。
  *
- * <p>实测结论（2026-09-22）：当前随心推 Token 下，
- * 「小店随心推订单列表」接口近 179 天无订单，
- * 真实订单挂在「随心推全域订单列表」接口（VIDEO_PROM_GOODS 商品全域）下。</p>
+ * <p>只拉取「随心推全域订单列表」接口
+ * /open_api/v1.0/qianchuan/aweme/uni_promotion/order/get/，
+ * 营销目标固定 VIDEO_PROM_GOODS（商品全域），cursor 翻页拉全。</p>
  *
- * <p>因此本服务同时拉取两类订单并统一去重：</p>
- * <ol>
- *   <li>小店随心推：/open_api/v1.0/qianchuan/aweme/order/get/
- *       —— 按营销目标（必填）分别查、180 天窗口切分、cursor 翻页；</li>
- *   <li>随心推全域：/open_api/v1.0/qianchuan/aweme/uni_promotion/order/get/
- *       —— 目前仅支持 VIDEO_PROM_GOODS（直播全域会报错），cursor 翻页。</li>
- * </ol>
+ * <p>已移除：小店随心推订单列表（/open_api/v1.0/qianchuan/aweme/order/get/）与直播全域拉取。</p>
  */
 public class SuixintuiOrderService {
 
-    /** 小店随心推接口限制：单次查询日期跨度不能超过 180 天 */
-    public static final int MAX_DATE_SPAN_DAYS = 180;
-
-    /** 小店随心推接口实际允许的最早查询：今天 - 179 天（180 天整会报「开始时间不能早于180天」） */
-    public static final int MAX_LOOKBACK_DAYS = MAX_DATE_SPAN_DAYS - 1;
-
-    /** 单窗口内防止异常导致死循环的最大翻页数 */
-    private static final int MAX_PAGES_PER_WINDOW = 2000;
-
-    private static final DateTimeFormatter DATE_FMT =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    /** 单账户内防止异常导致死循环的最大翻页数 */
+    private static final int MAX_PAGES = 2000;
 
     private final ApiClient apiClient;
     private final String accessToken;
@@ -88,22 +62,13 @@ public class SuixintuiOrderService {
 
     // ==================== 拉取结果 ====================
 
-    /** 拉取结果：小店随心推 + 随心推全域 两类订单 */
+    /** 拉取结果：随心推全域（商品）订单 */
     public static class FetchResult {
-        /** 小店随心推订单（key: advertiserId） */
-        public final Map<Long, List<QianchuanAwemeOrderGetV10ResponseDataListInner>> classicByAccount =
-                new LinkedHashMap<>();
         /** 随心推全域订单（key: advertiserId） */
         public final Map<Long, List<QianchuanAwemeUniPromotionOrderGetV10ResponseDataOrderListInner>> uniByAccount =
                 new LinkedHashMap<>();
         /** 查询失败的账户（key: advertiserId -> 原因） */
         public final Map<Long, String> failedAccounts = new LinkedHashMap<>();
-
-        public long classicTotal() {
-            long n = 0;
-            for (List<?> l : classicByAccount.values()) n += l.size();
-            return n;
-        }
 
         public long uniTotal() {
             long n = 0;
@@ -112,7 +77,7 @@ public class SuixintuiOrderService {
         }
 
         public long total() {
-            return classicTotal() + uniTotal();
+            return uniTotal();
         }
     }
 
@@ -172,22 +137,14 @@ public class SuixintuiOrderService {
     // ==================== 主入口 ====================
 
     /**
-     * 拉取指定千川业务账户列表在 [startDate, endDate] 范围内的全部随心推订单。
+     * 拉取指定千川业务账户列表下全部「随心推全域-商品订单」。
      *
      * @param advertiserIds 千川业务账户 ID 列表（空则自动发现全部账户）
-     * @param startDate     查询起始日期（小店随心推接口受 180 天限制，会内部钳制）
-     * @param endDate       查询结束日期
      */
-    public FetchResult fetchAllOrders(List<Long> advertiserIds,
-                                      LocalDate startDate, LocalDate endDate) throws ApiException {
+    public FetchResult fetchAllOrders(List<Long> advertiserIds) throws ApiException {
         List<Long> ids = advertiserIds == null || advertiserIds.isEmpty()
                 ? new ArrayList<>(discoverBusinessAdvertisers().keySet())
                 : advertiserIds;
-
-        if (startDate.isAfter(endDate)) {
-            throw new IllegalArgumentException(
-                    "起始日期不能晚于结束日期: " + startDate + " > " + endDate);
-        }
 
         FetchResult result = new FetchResult();
 
@@ -195,24 +152,7 @@ public class SuixintuiOrderService {
             System.out.println();
             System.out.println("==== 账户 " + advertiserId + " ====");
 
-            // 1) 小店随心推（独立执行，业务性错误不阻断账户）
-            try {
-                List<QianchuanAwemeOrderGetV10ResponseDataListInner> classic = withRetry(
-                        () -> fetchClassicOrders(advertiserId, startDate, endDate),
-                        "账户 " + advertiserId + " 小店随心推");
-                result.classicByAccount.put(advertiserId, classic);
-                System.out.println("  小店随心推订单: " + classic.size() + " 条");
-            } catch (ApiException e) {
-                if (isBusinessError(e)) {
-                    result.classicByAccount.put(advertiserId, new ArrayList<>());
-                    System.out.println("  [SKIP] 小店随心推接口不适用: " + e.getMessage());
-                } else {
-                    result.failedAccounts.put(advertiserId, "小店随心推: " + e.getMessage());
-                    System.out.println("  [WARN] 小店随心推拉取失败: " + e.getMessage());
-                }
-            }
-
-            // 2) 随心推全域（仅商品全域 VIDEO_PROM_GOODS）
+            // 随心推全域（仅商品全域 VIDEO_PROM_GOODS）
             try {
                 List<QianchuanAwemeUniPromotionOrderGetV10ResponseDataOrderListInner> uni =
                         withRetry(() -> fetchUniPromotionOrders(advertiserId),
@@ -273,112 +213,68 @@ public class SuixintuiOrderService {
         throw last;
     }
 
-    // ==================== 小店随心推（经典接口） ====================
-
-    public List<QianchuanAwemeOrderGetV10ResponseDataListInner> fetchClassicOrders(
-            Long advertiserId, LocalDate startDate, LocalDate endDate) throws ApiException {
-
-        if (startDate.isBefore(endDate.minusDays(MAX_LOOKBACK_DAYS))) {
-            startDate = endDate.minusDays(MAX_LOOKBACK_DAYS);
-        }
-
-        List<QianchuanAwemeOrderGetV10ResponseDataListInner> all = new ArrayList<>();
-        for (QianchuanAwemeOrderGetV10FilteringMarketingGoal goal :
-                new QianchuanAwemeOrderGetV10FilteringMarketingGoal[]{
-                        QianchuanAwemeOrderGetV10FilteringMarketingGoal.VIDEO_PROM_GOODS,
-                        QianchuanAwemeOrderGetV10FilteringMarketingGoal.LIVE_PROM_GOODS}) {
-            for (LocalDate[] window : splitWindows(startDate, endDate)) {
-                all.addAll(fetchClassicWindow(advertiserId, goal, window[0], window[1]));
-            }
-        }
-        return dedupeByOrderId(all);
-    }
-
-    private List<QianchuanAwemeOrderGetV10ResponseDataListInner> fetchClassicWindow(
-            Long advertiserId,
-            QianchuanAwemeOrderGetV10FilteringMarketingGoal goal,
-            LocalDate start, LocalDate end) throws ApiException {
-
-        QianchuanAwemeOrderGetV10Api api = new QianchuanAwemeOrderGetV10Api();
-        api.setApiClient(apiClient);
-
-        QianchuanAwemeOrderGetV10Filtering filtering = new QianchuanAwemeOrderGetV10Filtering();
-        filtering.setMarketingGoal(goal);
-
-        List<QianchuanAwemeOrderGetV10ResponseDataListInner> collected = new ArrayList<>();
-        Long cursor = null;
-
-        for (int page = 1; page <= MAX_PAGES_PER_WINDOW; page++) {
-            QianchuanAwemeOrderGetV10Response response =
-                    api.openApiV10QianchuanAwemeOrderGetGet(
-                            advertiserId,
-                            filtering,
-                            cursor,
-                            QianchuanAwemeOrderGetV10Count.NUMBER_50,
-                            QianchuanAwemeOrderGetV10OrderField.ORDER_CREATE_TIME,
-                            start.format(DATE_FMT),
-                            end.format(DATE_FMT));
-
-            Long code = response.getCode();
-            if (code == null || code != 0L) {
-                throw new ApiException("小店随心推订单列表 code=" + code
-                        + " message=" + response.getMessage()
-                        + " request_id=" + response.getRequestId());
-            }
-            QianchuanAwemeOrderGetV10ResponseData data = response.getData();
-            if (data == null) {
-                throw new ApiException("小店随心推订单列表 data 为空, request_id=" + response.getRequestId());
-            }
-            if (data.getList() != null) {
-                collected.addAll(data.getList());
-            }
-            List<Long> failList = data.getFailList();
-            if (failList != null && !failList.isEmpty()) {
-                System.out.println("    [WARN] 小店随心推该页存在获取失败订单: " + failList);
-            }
-
-            QianchuanAwemeOrderGetV10ResponseDataPageInfo pageInfo = data.getPageInfo();
-            boolean hasMore = pageInfo != null
-                    && pageInfo.getHasMore() == QianchuanAwemeOrderGetV10DataPageInfoHasMore.NUMBER_1;
-            if (!hasMore) {
-                break;
-            }
-            cursor = pageInfo.getCursor();
-            if (cursor == null) {
-                throw new ApiException("小店随心推返回 has_more=1 但缺少 cursor");
-            }
-            sleep();
-        }
-        return collected;
-    }
-
     // ==================== 随心推全域 ====================
 
+    /**
+     * 拉取指定账户的全部随心推全域订单（默认请求参数：商品全域、按创建时间排序、每页 50）。
+     */
     public List<QianchuanAwemeUniPromotionOrderGetV10ResponseDataOrderListInner> fetchUniPromotionOrders(
             Long advertiserId) throws ApiException {
+        return fetchUniPromotionOrders(new SuixintuiUniOrderListRequest(advertiserId));
+    }
+
+    /**
+     * 按请求 DTO 拉取随心推全域订单列表（cursor 分页拉全，按 order_id 去重）。
+     *
+     * <p>DTO 未设置的字段使用默认值：营销目标 VIDEO_PROM_GOODS（商品全域）、
+     * 排序按订单创建时间、每页 50 条。</p>
+     *
+     * @param request 查询请求 DTO（advertiserId 必填）
+     */
+    public List<QianchuanAwemeUniPromotionOrderGetV10ResponseDataOrderListInner> fetchUniPromotionOrders(
+            SuixintuiUniOrderListRequest request) throws ApiException {
+
+        if (request == null || request.getAdvertiserId() == null) {
+            throw new ApiException("随心推全域订单列表请求缺少 advertiser_id");
+        }
+        Long advertiserId = request.getAdvertiserId();
+
+        // 全域订单接口仅支持商品全域（VIDEO_PROM_GOODS），直播全域会返回
+        // code=40000「仅支持创建商品全域投放订单」
+        QianchuanAwemeUniPromotionOrderGetV10MarketingGoal goal = request.getMarketingGoal();
+        if (goal == null) {
+            goal = QianchuanAwemeUniPromotionOrderGetV10MarketingGoal.VIDEO_PROM_GOODS;
+        }
+
+        QianchuanAwemeUniPromotionOrderGetV10Filtering filtering = request.toFiltering();
+
+        QianchuanAwemeUniPromotionOrderGetV10OrderField orderField = request.getOrderField();
+        if (orderField == null) {
+            orderField = QianchuanAwemeUniPromotionOrderGetV10OrderField.ORDER_CREATE_TIME;
+        }
+
+        QianchuanAwemeUniPromotionOrderGetV10Count count = request.getCount();
+        if (count == null) {
+            count = QianchuanAwemeUniPromotionOrderGetV10Count.NUMBER_50;
+        }
 
         QianchuanAwemeUniPromotionOrderGetV10Api api =
                 new QianchuanAwemeUniPromotionOrderGetV10Api();
         api.setApiClient(apiClient);
 
-        // 全域订单目前仅支持商品全域（VIDEO_PROM_GOODS），直播全域会返回
-        // code=40000「仅支持创建商品全域投放订单」
-        QianchuanAwemeUniPromotionOrderGetV10MarketingGoal goal =
-                QianchuanAwemeUniPromotionOrderGetV10MarketingGoal.VIDEO_PROM_GOODS;
-
         List<QianchuanAwemeUniPromotionOrderGetV10ResponseDataOrderListInner> collected =
                 new ArrayList<>();
-        Long cursor = null;
+        Long cursor = request.getCursor();
 
-        for (int page = 1; page <= MAX_PAGES_PER_WINDOW; page++) {
+        for (int page = 1; page <= MAX_PAGES; page++) {
             QianchuanAwemeUniPromotionOrderGetV10Response response =
                     api.openApiV10QianchuanAwemeUniPromotionOrderGetGet(
                             advertiserId,
                             goal,
-                            new QianchuanAwemeUniPromotionOrderGetV10Filtering(), // status 过滤
-                            QianchuanAwemeUniPromotionOrderGetV10OrderField.ORDER_CREATE_TIME,
+                            filtering,
+                            orderField,
                             cursor,
-                            QianchuanAwemeUniPromotionOrderGetV10Count.NUMBER_50);
+                            count);
 
             Long code = response.getCode();
             if (code == null || code != 0L) {
@@ -411,30 +307,6 @@ public class SuixintuiOrderService {
     }
 
     // ==================== 工具 ====================
-
-    /** 按 180 天跨度把 [start, end] 切分为若干时间窗口（含边界） */
-    public static List<LocalDate[]> splitWindows(LocalDate start, LocalDate end) {
-        List<LocalDate[]> windows = new ArrayList<>();
-        LocalDate cursor = start;
-        while (!cursor.isAfter(end)) {
-            LocalDate windowEnd = cursor.plusDays(MAX_DATE_SPAN_DAYS - 1);
-            if (windowEnd.isAfter(end)) {
-                windowEnd = end;
-            }
-            windows.add(new LocalDate[]{cursor, windowEnd});
-            cursor = windowEnd.plusDays(1);
-        }
-        return windows;
-    }
-
-    private static List<QianchuanAwemeOrderGetV10ResponseDataListInner> dedupeByOrderId(
-            List<QianchuanAwemeOrderGetV10ResponseDataListInner> list) {
-        Map<Long, QianchuanAwemeOrderGetV10ResponseDataListInner> map = new LinkedHashMap<>();
-        for (var o : list) {
-            map.putIfAbsent(o.getOrderId(), o);
-        }
-        return new ArrayList<>(map.values());
-    }
 
     private static List<QianchuanAwemeUniPromotionOrderGetV10ResponseDataOrderListInner>
     dedupeUniByOrderId(

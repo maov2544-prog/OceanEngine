@@ -1,5 +1,5 @@
 
-package com.example.oceanengine.test;
+package com.example.oceanengine.test.qianchuan;
 import com.example.oceanengine.client.QianchuanTokenClient;
 
 public class QianchuanTokenTest {

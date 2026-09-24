@@ -3,6 +3,27 @@
     "configurations": [
         {
             "type": "java",
+            "name": "SuixintuiUniOrderDetailTest",
+            "request": "launch",
+            "mainClass": "com.example.oceanengine.test.suixintui.SuixintuiUniOrderDetailTest",
+            "projectName": "oceanengine-demo"
+        },
+        {
+            "type": "java",
+            "name": "SuixintuiUniOrderListTest",
+            "request": "launch",
+            "mainClass": "com.example.oceanengine.test.SuixintuiUniOrderListTest",
+            "projectName": "oceanengine-demo"
+        },
+        {
+            "type": "java",
+            "name": "QianchuanOrderTest",
+            "request": "launch",
+            "mainClass": "com.example.oceanengine.test.QianchuanOrderTest",
+            "projectName": "oceanengine-demo"
+        },
+        {
+            "type": "java",
             "name": "QianchuanTokenTest",
             "request": "launch",
             "mainClass": "com.example.oceanengine.test.QianchuanTokenTest",
