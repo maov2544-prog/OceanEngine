@@ -8,6 +8,8 @@ import com.bytedance.ads.model.QianchuanUniAwemeAuthorizedGetV10Response;
 import com.bytedance.ads.model.QianchuanUniAwemeAuthorizedGetV10ResponseData;
 import com.bytedance.ads.model.QianchuanUniAwemeAuthorizedGetV10ResponseDataAwemeIdListInner;
 import com.bytedance.ads.model.QianchuanVideoGetV10Filtering;
+import com.bytedance.ads.model.QianchuanVideoGetV10FilteringImageMode;
+import com.bytedance.ads.model.QianchuanVideoGetV10FilteringSources;
 import com.bytedance.ads.model.QianchuanVideoGetV10Response;
 import com.bytedance.ads.model.QianchuanVideoGetV10ResponseData;
 import com.bytedance.ads.model.QianchuanVideoGetV10ResponseDataListInner;
@@ -178,27 +180,21 @@ public class CreatePlanDemo {
     public static void main(String[] args) throws Exception {
 
         // 辅助模式：查千川素材库视频，拿 video_id 填 VIDEO_MATERIALS
-        //   --list-video              列出素材库视频（最多翻 5 页 × 100 条）
-        //   --list-video=洗发水        按文件名关键词过滤
-        //   --video-ids=id1,id2,id3   按指定 video_id 批量查（一次最多 100 个）
-        for (String a : args == null ? new String[0] : args) {
-            if (a.equals("--list-video") || a.startsWith("--list-video=")) {
-                String kw = a.startsWith("--list-video=")
-                        ? a.substring("--list-video=".length()).trim()
-                        : "";
-                listLibraryVideo(ADVERTISER_ID, null, kw);
-                return;
-            }
-            if (a.startsWith("--video-ids=")) {
-                List<String> ids = new ArrayList<>();
-                for (String s : a.substring("--video-ids=".length()).split(",")) {
-                    if (!s.isBlank()) {
-                        ids.add(s.trim());
-                    }
-                }
-                listLibraryVideo(ADVERTISER_ID, ids, "");
-                return;
-            }
+        //   --list-video                    列出素材库视频
+        //   --list-video=洗发水              文件名关键词过滤（客户端过滤，服务端不支持按名字查）
+        //   --video-ids=id1,id2,id3         按 video_id 批量查（<=100）
+        //   --material-ids=123,456          按素材id 批量查（<=100）
+        //   --signatures=md5a,md5b          按视频 md5 批量查（<=100）
+        //   --image-mode=VIDEO_VERTICAL     按素材类型过滤（VIDEO_VERTICAL/VIDEO_LARGE）
+        //   --tags=标签1,标签2               按素材标签过滤
+        //   --sources=E_COMMERCE            按素材来源过滤
+        //   --start=2026-08-01 --end=2026-08-31   按上传时间过滤（yyyy-MM-dd）
+        //   --pages=5                       翻页数（默认 5，每页 100）
+        //   注意：video-ids / material-ids / signatures 三者只能选一个
+        if (hasAnyArg(args, "--list-video", "--video-ids", "--material-ids", "--signatures",
+                "--name", "--image-mode", "--tags", "--sources", "--start", "--end", "--pages")) {
+            listLibraryVideo(ADVERTISER_ID, args);
+            return;
         }
 
         // 辅助模式：列出已授权抖音号，用来把后台的「抖音号」换成数字 AWEME_UID
@@ -449,13 +445,14 @@ public class CreatePlanDemo {
     private static final String AD_HOST = "https://ad.oceanengine.com";
 
     /**
-     * 查素材库视频。
+     * 查素材库视频，支持命令行过滤参数（见 main 里的用法说明）。
      *
-     * @param videoIds 非空时按 video_ids 批量过滤（文档上限 100 个）；为空则翻页列出全部
-     * @param keyword  为空则不过滤；非空则按文件名（filename）在客户端模糊过滤
+     * <p>服务端过滤（文档支持）：video_ids / material_ids / signatures（三选一，各 &lt;=100）、
+     * image_mode、tags、sources、start_time+end_time。</p>
+     * <p>客户端过滤：文件名关键词（{@code --list-video=xxx} 或 {@code --name=xxx}），
+     * 服务端没有按文件名查的能力。</p>
      */
-    private static void listLibraryVideo(long advertiserId, List<String> videoIds, String keyword)
-            throws Exception {
+    private static void listLibraryVideo(long advertiserId, String[] args) throws Exception {
 
         String token = QianchuanTokenClient.getAccessToken();
         if (token == null || token.isBlank()) {
@@ -463,41 +460,105 @@ public class CreatePlanDemo {
             return;
         }
 
+        // ⚠ 这个接口的域名是 ad.oceanengine.com，SDK 默认是 api.oceanengine.com，必须显式改
         ApiClient client = new ApiClient();
         client.setBasePath(AD_HOST);
         client.addDefaultHeader("Access-Token", token);
         QianchuanVideoGetV10Api api = new QianchuanVideoGetV10Api(client);
 
-        boolean byIds = videoIds != null && !videoIds.isEmpty();
+        // ---------------- 解析过滤参数 ----------------
+        List<String> videoIds = splitCsv(argValue(args, "video-ids"));
+        List<Long> materialIds = splitLongCsv(argValue(args, "material-ids"));
+        List<String> signatures = splitCsv(argValue(args, "signatures"));
+
+        int exclusive = (videoIds == null ? 0 : 1)
+                + (materialIds == null ? 0 : 1)
+                + (signatures == null ? 0 : 1);
+        if (exclusive > 1) {
+            System.out.println("❌ video-ids / material-ids / signatures 三者只能选一个（文档约束）");
+            return;
+        }
+        if (videoIds != null && videoIds.size() > 100) {
+            System.out.println("❌ video-ids 最多 100 个，当前 " + videoIds.size() + " 个");
+            return;
+        }
+
+        QianchuanVideoGetV10Filtering filtering = new QianchuanVideoGetV10Filtering();
+        if (videoIds != null) {
+            filtering.videoIds(videoIds);
+        }
+        if (materialIds != null) {
+            filtering.materialIds(materialIds);
+        }
+        if (signatures != null) {
+            filtering.signatures(signatures);
+        }
+
+        List<String> imageModes = splitCsv(argValue(args, "image-mode"));
+        if (imageModes != null) {
+            List<QianchuanVideoGetV10FilteringImageMode> modes = new ArrayList<>(imageModes.size());
+            for (String m : imageModes) {
+                modes.add(QianchuanVideoGetV10FilteringImageMode.fromValue(m.toUpperCase()));
+            }
+            filtering.imageMode(modes);
+        }
+
+        List<String> tags = splitCsv(argValue(args, "tags"));
+        if (tags != null) {
+            filtering.tags(tags);
+        }
+
+        List<String> sources = splitCsv(argValue(args, "sources"));
+        if (sources != null) {
+            List<QianchuanVideoGetV10FilteringSources> srcs = new ArrayList<>(sources.size());
+            for (String s : sources) {
+                srcs.add(QianchuanVideoGetV10FilteringSources.fromValue(s.toUpperCase()));
+            }
+            filtering.sources(srcs);
+        }
+
+        String start = argValue(args, "start");
+        String end = argValue(args, "end");
+        if (start != null) {
+            filtering.startTime(start);
+        }
+        if (end != null) {
+            filtering.endTime(end);
+        }
+
+        // 文件名关键词：客户端过滤
+        String keyword = argValue(args, "name");
+        if (keyword == null) {
+            keyword = argValue(args, "list-video");
+        }
         boolean filtered = keyword != null && !keyword.isBlank();
         String kw = filtered ? keyword.toLowerCase() : null;
 
-        QianchuanVideoGetV10Filtering filtering = new QianchuanVideoGetV10Filtering();
-        if (byIds) {
-            // 文档：video_ids / material_ids / signatures 三者只能选一个，上限 100
-            filtering.videoIds(videoIds);
-            System.out.println("=== 素材库视频查询（按 video_ids，" + videoIds.size() + " 个）===");
-        } else {
-            System.out.println("=== 素材库视频列表（账户 " + advertiserId + "）"
-                    + (filtered ? "  文件名过滤：" + keyword : "") + " ===");
-        }
+        // ---------------- 打印本次实际使用的过滤条件 ----------------
+        boolean byIds = videoIds != null || materialIds != null || signatures != null;
+        int pageSize = 100;
+        int maxPage = byIds ? 1 : parseInt(argValue(args, "pages"), 5);
 
-        int pageSize = byIds ? Math.max(videoIds.size(), 1) : 100;
-        int maxPage = byIds ? 1 : 5;
-        System.out.printf("%-28s %-16s %-9s %-12s %s%n",
+        System.out.println("=== 千川素材库视频查询（账户 " + advertiserId + "）===");
+        System.out.println("过滤条件：" + describeFilter(videoIds, materialIds, signatures,
+                imageModes, tags, sources, start, end, filtered ? keyword : null));
+        System.out.println();
+        System.out.printf("%-30s %-15s %-9s %-12s %s%n",
                 "video_id(填 VIDEO_MATERIALS)", "image_mode", "时长(s)", "上传日期", "文件名");
-        System.out.println("-".repeat(118));
+        System.out.println("-".repeat(120));
 
         int total = 0;
         long totalNumber = -1L;
         for (int page = 1; page <= maxPage; page++) {
             QianchuanVideoGetV10Response resp =
-                    api.openApiV10QianchuanVideoGetGet(advertiserId, filtering, page, pageSize);
-
-            if (resp == null || resp.getCode() == null || resp.getCode() != 0) {
-                System.out.println("❌ 接口返回异常：code=" + (resp == null ? "null" : resp.getCode())
-                        + "  message=" + (resp == null ? "null" : resp.getMessage())
-                        + "  requestId=" + (resp == null ? "null" : resp.getRequestId()));
+                    apiCall(api, advertiserId, filtering, page, pageSize);
+            if (resp == null) {
+                return;
+            }
+            if (resp.getCode() == null || resp.getCode() != 0) {
+                System.out.println("❌ 接口返回异常：code=" + resp.getCode()
+                        + "  message=" + resp.getMessage()
+                        + "  requestId=" + resp.getRequestId());
                 return;
             }
 
@@ -517,7 +578,7 @@ public class CreatePlanDemo {
                 if (filtered && !name.toLowerCase().contains(kw)) {
                     continue;
                 }
-                System.out.printf("%-28s %-16s %-9s %-12s %s%n",
+                System.out.printf("%-30s %-15s %-9s %-12s %s%n",
                         item.getId(),
                         item.getImageMode() == null ? "-" : item.getImageMode().getValue(),
                         item.getDuration() == null ? "-" : String.valueOf(item.getDuration()),
@@ -534,16 +595,143 @@ public class CreatePlanDemo {
             Thread.sleep(800L);
         }
 
-        System.out.println("-".repeat(118));
+        System.out.println("-".repeat(120));
         if (total == 0) {
             System.out.println("(没有查到视频素材；素材库有分钟级延迟，刚上传的请等几分钟再查)");
             return;
         }
-        String scope = totalNumber < 0
-                ? "共 " + total + " 条"
-                : "共 " + total + " 条（账户素材库总数 " + totalNumber + " 条"
-                        + (totalNumber > total ? "，本次只列了前 " + maxPage + " 页，可调大 maxPage" : "")
-                        + "）";
+        StringBuilder scope = new StringBuilder("共 " + total + " 条");
+        if (totalNumber >= 0) {
+            scope.append("（符合过滤条件的总数 ").append(totalNumber).append(" 条");
+            if (totalNumber > total) {
+                scope.append("，本次只列了前 ").append(maxPage).append(" 页，可加 --pages=N 调大");
+            }
+            scope.append("）");
+        }
         System.out.println(scope + "。把第一列的 video_id 填到 VIDEO_MATERIALS。");
+    }
+
+    /** 抽出来是为了让上面的主循环读起来干净。 */
+    private static QianchuanVideoGetV10Response apiCall(QianchuanVideoGetV10Api api,
+                                                         long advertiserId,
+                                                         QianchuanVideoGetV10Filtering filtering,
+                                                         int page, int pageSize) throws Exception {
+        try {
+            return api.openApiV10QianchuanVideoGetGet(advertiserId, filtering,
+                    Integer.valueOf(page), Integer.valueOf(pageSize));
+        } catch (com.bytedance.ads.ApiException e) {
+            System.out.println("❌ 调用失败：" + e.getMessage());
+            return null;
+        }
+    }
+
+    private static String describeFilter(List<String> videoIds, List<Long> materialIds,
+                                         List<String> signatures, List<String> imageModes,
+                                         List<String> tags, List<String> sources,
+                                         String start, String end, String keyword) {
+        List<String> parts = new ArrayList<>();
+        if (videoIds != null) {
+            parts.add("video_ids=" + videoIds);
+        }
+        if (materialIds != null) {
+            parts.add("material_ids=" + materialIds);
+        }
+        if (signatures != null) {
+            parts.add("signatures=" + signatures);
+        }
+        if (imageModes != null) {
+            parts.add("image_mode=" + imageModes);
+        }
+        if (tags != null) {
+            parts.add("tags=" + tags);
+        }
+        if (sources != null) {
+            parts.add("sources=" + sources);
+        }
+        if (start != null) {
+            parts.add("start_time=" + start);
+        }
+        if (end != null) {
+            parts.add("end_time=" + end);
+        }
+        if (keyword != null) {
+            parts.add("文件名含「" + keyword + "」(客户端过滤)");
+        }
+        return parts.isEmpty() ? "(无，返回全部)" : String.join("  ", parts);
+    }
+
+    /** 取 {@code --key=value} 里的 value；没传返回 null。 */
+    private static String argValue(String[] args, String key) {
+        if (args == null) {
+            return null;
+        }
+        String prefix = "--" + key + "=";
+        for (String a : args) {
+            if (a.startsWith(prefix)) {
+                String v = a.substring(prefix.length()).trim();
+                return v.isEmpty() ? null : v;
+            }
+        }
+        return null;
+    }
+
+    /** 是否出现了 {@code --flag} 或 {@code --flag=xxx}。 */
+    private static boolean hasArg(String[] args, String flag) {
+        if (args == null) {
+            return false;
+        }
+        for (String a : args) {
+            if (a.equals(flag) || a.startsWith(flag + "=")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 任意一个 flag 命中即返回 true。 */
+    private static boolean hasAnyArg(String[] args, String... flags) {
+        for (String f : flags) {
+            if (hasArg(args, f)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<String> splitCsv(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        List<String> out = new ArrayList<>();
+        for (String s : value.split(",")) {
+            if (!s.isBlank()) {
+                out.add(s.trim());
+            }
+        }
+        return out.isEmpty() ? null : out;
+    }
+
+    private static List<Long> splitLongCsv(String value) {
+        List<String> parts = splitCsv(value);
+        if (parts == null) {
+            return null;
+        }
+        List<Long> out = new ArrayList<>(parts.size());
+        for (String s : parts) {
+            out.add(Long.valueOf(s));
+        }
+        return out;
+    }
+
+    private static int parseInt(String value, int defaultValue) {
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            int v = Integer.parseInt(value.trim());
+            return v < 1 ? defaultValue : v;
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
     }
 }
