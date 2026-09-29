@@ -3,6 +3,13 @@
     "configurations": [
         {
             "type": "java",
+            "name": "QianchuanDemo",
+            "request": "launch",
+            "mainClass": "com.example.oceanengine.plant_search.QianchuanDemo",
+            "projectName": "oceanengine-demo"
+        },
+        {
+            "type": "java",
             "name": "SuixintuiUniOrderDetailTest",
             "request": "launch",
             "mainClass": "com.example.oceanengine.test.suixintui.SuixintuiUniOrderDetailTest",

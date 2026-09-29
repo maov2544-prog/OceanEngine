@@ -1,10 +1,5 @@
 package com.example.oceanengine.plant_search;
 
-import com.example.oceanengine.plant_search.PlanQueryResult;
-import com.example.oceanengine.plant_search.PromotionPlanDTO;
-import com.example.oceanengine.plant_search.QianchuanPlanQueryService;
-import com.example.oceanengine.plant_search.QianchuanTokenClient;
-
 import java.util.Arrays;
 import java.util.List;
 
@@ -14,8 +9,14 @@ import java.util.List;
  * 调用流程：
  * 1. 初始化 QianchuanTokenClient（Token 从服务端自动获取）
  * 2. 初始化 QianchuanPlanQueryService（传入 tokenClient）
- * 3. 调用 queryPlansByAwemeId() 按抖音号查询计划
+ * 3. 调用 queryPlansByKeyword() 查询计划
  * 4. 根据 PlanQueryResult 的三种类型做不同处理
+ *
+ * 查询模式（queryPlansByKeyword 四模式）：
+ *  - 只填 awemeId   ：按抖音号查（服务端 AWEME 过滤）
+ *  - 只填 productId ：按商品ID查（服务端 PRODUCT 过滤）
+ *  - 都填           ：抖音号 + 商品 双重过滤（服务端按抖音号 + 本地按商品ID精确匹配）
+ *  - 都为空         ：全量模式（投放中 + 有消耗 + 近1个月 + 创建时间降序，返回概要）
  */
 public class QianchuanDemo {
 
@@ -29,7 +30,8 @@ public class QianchuanDemo {
         QianchuanPlanQueryService queryService = new QianchuanPlanQueryService(tokenClient);
 
         // ===== 查询参数 =====
-        String awemeId = "109050136126";  // 抖音号
+        String awemeId = "";   // 抖音号（可空，留空进入全量模式前提是 productId 也为空）
+        String productId = ""; // 商品ID（可空）
         String marketingGoal = "VIDEO_PROM_GOODS"; // 商品投放
         List<String> fields = Arrays.asList(
                 "stat_cost",
@@ -41,8 +43,8 @@ public class QianchuanDemo {
         );
 
         // ===== 执行查询 =====
-        PlanQueryResult result = queryService.queryPlansByAwemeId(
-                advertiserId, awemeId, marketingGoal, fields);
+        PlanQueryResult result = queryService.queryPlansByKeyword(
+                advertiserId, awemeId, productId, marketingGoal, fields);
 
         // ===== 处理结果 =====
         switch (result.getResultType()) {
