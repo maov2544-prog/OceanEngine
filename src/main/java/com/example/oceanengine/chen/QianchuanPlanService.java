@@ -1,6 +1,7 @@
 package com.example.oceanengine.chen;
 
 import com.bytedance.ads.ApiClient;
+import com.example.oceanengine.client.ApiClients;
 import com.bytedance.ads.ApiException;
 import com.bytedance.ads.api.QianchuanUniPromotionListV10Api;
 import com.bytedance.ads.model.QianchuanUniPromotionListV10Fields;
@@ -37,6 +38,7 @@ public final class QianchuanPlanService {
         }
         ApiClient client = new ApiClient();
         client.setBasePath(BASE_PATH);
+        ApiClients.configure(client);
         client.addDefaultHeader("Access-Token", accessToken);
         this.api = new QianchuanUniPromotionListV10Api(client);
     }

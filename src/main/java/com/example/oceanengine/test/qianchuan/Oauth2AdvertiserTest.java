@@ -1,6 +1,7 @@
 package com.example.oceanengine.test.qianchuan;
 
 import com.bytedance.ads.ApiClient;
+import com.example.oceanengine.client.ApiClients;
 import com.bytedance.ads.api.Oauth2AdvertiserGetApi;
 import com.bytedance.ads.model.Oauth2AdvertiserGetResponse;
 import com.bytedance.ads.model.Oauth2AdvertiserGetResponseData;
@@ -20,6 +21,7 @@ public class Oauth2AdvertiserTest {
 
         ApiClient apiClient = new ApiClient();
         apiClient.setBasePath("https://api.oceanengine.com");
+        ApiClients.configure(apiClient);
 
         Oauth2AdvertiserGetApi api = new Oauth2AdvertiserGetApi();
         api.setApiClient(apiClient);

@@ -1,6 +1,7 @@
 package com.example.oceanengine.test.suixintui;
 
 import com.bytedance.ads.ApiClient;
+import com.example.oceanengine.client.ApiClients;
 import com.bytedance.ads.model.QianchuanAwemeUniPromotionOrderGetV10FilteringStatus;
 import com.bytedance.ads.model.QianchuanAwemeUniPromotionOrderGetV10OrderField;
 import com.bytedance.ads.model.QianchuanAwemeUniPromotionOrderGetV10ResponseDataOrderListInner;
@@ -50,6 +51,7 @@ public class SuixintuiUniOrderDetailTest {
 
         ApiClient apiClient = new ApiClient();
         apiClient.setBasePath("https://api.oceanengine.com");
+        ApiClients.configure(apiClient);
         apiClient.addDefaultHeader("Access-Token", token);
 
         Long advertiserId = parseAdvertiserId();

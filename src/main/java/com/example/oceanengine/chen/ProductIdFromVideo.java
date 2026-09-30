@@ -1,6 +1,7 @@
 package com.example.oceanengine.chen;
 
 import com.bytedance.ads.ApiClient;
+import com.example.oceanengine.client.ApiClients;
 import com.bytedance.ads.api.QianchuanAwemeVideoGetV10Api;
 import com.bytedance.ads.api.QianchuanUniAwemeAuthorizedGetV10Api;
 import com.bytedance.ads.api.QianchuanUniPromotionProductAwemeGetV10Api;
@@ -8,6 +9,8 @@ import com.bytedance.ads.model.QianchuanAwemeVideoGetV10DataPageInfoHasMore;
 import com.bytedance.ads.model.QianchuanAwemeVideoGetV10MarketingGoal;
 import com.bytedance.ads.model.QianchuanAwemeVideoGetV10ResponseDataVideoListInner;
 import com.bytedance.ads.model.QianchuanUniAwemeAuthorizedGetV10ResponseDataAwemeIdListInner;
+import com.bytedance.ads.model.QianchuanUniAwemeAuthorizedGetV10Filtering;
+import com.bytedance.ads.model.QianchuanUniAwemeAuthorizedGetV10FilteringMarketingGoal;
 import com.bytedance.ads.model.QianchuanUniPromotionProductAwemeGetV10Filtering;
 import com.bytedance.ads.model.QianchuanUniPromotionProductAwemeGetV10FilteringTab;
 import com.bytedance.ads.model.QianchuanUniPromotionProductAwemeGetV10Platform;
@@ -25,6 +28,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -76,16 +80,16 @@ public class ProductIdFromVideo {
 
     private static final String ADVERTISER_ID = "1823379540880396";         // 千川账户ID
     private static final String SHARE_TEXT =
-            "1.58 复制打开抖音，看看【小夏天妈妈的作品】瑕疵皮的持妆亲妈出现了"
-            + "!细腻服帖认准它，卡粉不存在... https://v.douyin.com/RBWIVnSuTrw/ :3pm 10/14 XZZ:/ R@K.Wz ";
-    private static final String AWEME_NICKNAME = "小夏天妈妈";               // 抖音号昵称
+            "1.53 复制打开抖音，看看【辰辰麻麻🌙的作品】# 澳兰黛 # 儿童面霜 "
+            + "# 澳兰黛婴儿面霜 # ... https://v.douyin.com/v0DJ0HJy7zY/ 09/12 YMJ:/ I@v.SY :3pm ";
+    private static final String AWEME_NICKNAME = "辰辰麻麻🌙";               // 抖音号昵称
     private static final String FALLBACK_PRODUCT_NAME = "澳兰黛";            // 兜底反查用的品名
 
     /** 已知抖音号uid时直接填（纯数字！），非空则跳过②的查询 */
     private static final String MANUAL_AWEME_UID = "";
 
-    /** 后台看到的抖音号字符串（如 z1590389），比昵称可靠，优先用它精确匹配 */
-    private static final String MANUAL_DOUYIN_ID = "z1590389";
+    /** 后台看到的抖音号字符串（如 9168360782），比昵称可靠，优先用它精确匹配 */
+    private static final String MANUAL_DOUYIN_ID = "";
 
     /** 短链解析失败时，手工填19位视频ID */
     private static final String MANUAL_ITEM_ID = "";
@@ -101,6 +105,7 @@ public class ProductIdFromVideo {
     private static ApiClient sdkClient;
     private static String lastLandingBody = "";   // 短链最终落地页 HTML
     private static String lastLandingUrl  = "";   // 短链最终落地 URL
+    private static long autoAuthorUid = 0;        // 从分享参数 social_author_id 解析出的作者 uid
 
     // ========================================================================
     // 常量
@@ -150,6 +155,7 @@ public class ProductIdFromVideo {
         }
         sdkClient = new ApiClient();
         sdkClient.setBasePath(API_HOST);
+        ApiClients.configure(sdkClient);
         sdkClient.addDefaultHeader("Access-Token", sxToken);
 
         // ---------- ① 视频ID ----------
@@ -157,13 +163,24 @@ public class ProductIdFromVideo {
         System.out.println("① 视频ID       = " + itemId);
 
         // ---------- ② 抖音号uid ----------
-        // 优先级：手动填 uid > 视频ID直查作者 > 并发翻全部已授权号匹配
+        // 优先级：手动填 uid > 视频ID直查作者 > 分享参数 social_author_id > 授权号检索匹配
         long uid;
         if (!MANUAL_AWEME_UID.isEmpty()) {
             uid = Long.parseLong(MANUAL_AWEME_UID.trim());
             System.out.println("   已指定 uid，跳过查询");
         } else {
             uid = resolveAuthorUidByItemId(itemId);
+            if (uid == 0) {
+                if (autoAuthorUid == 0) {
+                    // 短链每一跳的 URL 都扫过了，这里再兜底扫一次口令原文 + 最终落地 URL
+                    autoAuthorUid = extractAuthorIdFromShare(SHARE_TEXT + " " + lastLandingUrl);
+                }
+                if (autoAuthorUid != 0) {
+                    uid = autoAuthorUid;
+                    System.out.println("   [分享链接] social_author_id 命中 uid=" + uid
+                            + "（抖音分享参数自带，不走风控接口）");
+                }
+            }
             if (uid == 0) {
                 uid = findAwemeUid();
             }
@@ -244,6 +261,16 @@ public class ProductIdFromVideo {
             if (id == null) {
                 id = extractItemId(body);
             }
+
+            // 分享链路参数 activity_info.social_author_id 即作者数字 uid，
+            // 每一跳的 URL / 正文都扫一遍，找到就留住（不依赖 iteminfo，不受风控影响）
+            if (autoAuthorUid == 0) {
+                autoAuthorUid = extractAuthorIdFromShare(url);
+                if (autoAuthorUid == 0 && !body.isEmpty()) {
+                    autoAuthorUid = extractAuthorIdFromShare(body);
+                }
+            }
+
             if (id != null) {
                 System.out.println("   最终落地    = " + url);
                 return id;
@@ -283,6 +310,30 @@ public class ProductIdFromVideo {
             }
         }
         return null;
+    }
+
+    /**
+     * 从分享链接里提取作者数字 uid。
+     *
+     * <p>抖音分享短链展开后的 URL 带 activity_info 参数（URL 编码的 JSON），
+     * 形如 {@code activity_info=%7B%22social_author_id%22%3A%223206653666920558%22...}，
+     * 其中 social_author_id 就是作者的数字 uid。先 URL 解码再正则匹配。</p>
+     *
+     * @return 作者 uid；取不到返回 0
+     */
+    private static long extractAuthorIdFromShare(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return 0;
+        }
+        String decoded;
+        try {
+            decoded = URLDecoder.decode(raw, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            decoded = raw;
+        }
+        Matcher m = Pattern.compile("social_author_id[\"']?\\s*[:=]\\s*\"?(\\d{5,25})")
+                .matcher(decoded);
+        return m.find() ? Long.parseLong(m.group(1)) : 0;
     }
 
     /** 读流，流为 null 时返回空串（避免 4xx 且无响应体时 NPE） */
@@ -383,32 +434,46 @@ public class ProductIdFromVideo {
     // ②  查全部已授权抖音号（并发翻页 + 去重 + 精确匹配）
     // ========================================================================
     private static long findAwemeUid() throws Exception {
-        Map<Long, Cand> uniq = Collections.synchronizedMap(new LinkedHashMap<>());
+        Map<Long, Cand> uniq = new LinkedHashMap<>();
         ApiClient client = new ApiClient();
         client.setBasePath(API_HOST);
+        ApiClients.configure(client);
         client.addDefaultHeader("Access-Token", pcToken);
         QianchuanUniAwemeAuthorizedGetV10Api api =
                 new QianchuanUniAwemeAuthorizedGetV10Api(client);
+        Long adv = Long.valueOf(ADVERTISER_ID);
 
-        for (long page = 1; page <= 60; page++) {
+        // —— ① 服务端关键词检索（覆盖全部授权号，不受翻页上限影响）——
+        // 抖音号优先；没填抖音号就用昵称（去掉 emoji 后的核心词，服务端是模糊检索）
+        String keyword = !MANUAL_DOUYIN_ID.isEmpty() ? MANUAL_DOUYIN_ID : clean(AWEME_NICKNAME);
+        if (keyword != null && !keyword.isBlank()) {
+            QianchuanUniAwemeAuthorizedGetV10FilteringMarketingGoal[] goals = {
+                    QianchuanUniAwemeAuthorizedGetV10FilteringMarketingGoal.VIDEO_PROM_GOODS,
+                    QianchuanUniAwemeAuthorizedGetV10FilteringMarketingGoal.LIVE_PROM_GOODS};
+            for (var goal : goals) {
+                collectAuthorizedSearch(api, adv, keyword, goal, uniq, 5);
+                long hit = matchCandidate(uniq);
+                if (hit != 0) {
+                    return hit;
+                }
+            }
+            System.out.println("   [SDK] 服务端检索「" + keyword + "」未精确命中，转全量翻页");
+        }
+
+        // —— ② 全量翻页兜底：按服务端 total_page 翻完，硬上限 200 页（2 万个号）——
+        for (long page = 1; page <= 200; page++) {
             var response = api.openApiV10QianchuanUniAwemeAuthorizedGetGet(
-                    Long.valueOf(ADVERTISER_ID), null, page, 100L);
+                    adv, null, page, 100L);
             if (response == null || response.getData() == null
                     || response.getData().getAwemeIdList() == null) {
                 break;
             }
-            for (QianchuanUniAwemeAuthorizedGetV10ResponseDataAwemeIdListInner a
-                    : response.getData().getAwemeIdList()) {
-                if (a.getAwemeId() != null) {
-                    uniq.putIfAbsent(a.getAwemeId(), new Cand(
-                            a.getAwemeId(), a.getAwemeName(), a.getAwemeShowId()));
-                }
-            }
-            if (response.getData().getPageInfo() == null
-                    || response.getData().getPageInfo().getTotalPage() == null
-                    || page >= response.getData().getPageInfo().getTotalPage()) {
+            mergeCandidates(response.getData().getAwemeIdList(), uniq);
+            var pi = response.getData().getPageInfo();
+            if (pi == null || pi.getTotalPage() == null || page >= pi.getTotalPage()) {
                 break;
             }
+            Thread.sleep(300L);   // 放慢节奏，避免触发频控 40100
         }
         System.out.println("   [SDK] 完成，唯一抖音号 " + uniq.size() + " 个");
 
@@ -416,37 +481,15 @@ public class ProductIdFromVideo {
             throw new IllegalStateException("没查到任何已授权抖音号，请确认 ADVERTISER_ID 是否正确");
         }
 
-        // —— 零级：按抖音号字符串精确匹配（最可靠）——
-        if (!MANUAL_DOUYIN_ID.isEmpty()) {
-            for (Cand c : uniq.values()) {
-                if (MANUAL_DOUYIN_ID.equalsIgnoreCase(c.douyinId)) {
-                    System.out.println("   抖音号命中：" + c.douyinId + " -> uid=" + c.id);
-                    return c.id;
-                }
-            }
-            System.out.println("   抖音号「" + MANUAL_DOUYIN_ID + "」未在列表中，转昵称匹配");
+        long hit = matchCandidate(uniq);
+        if (hit != 0) {
+            return hit;
         }
 
-        // —— 一级：昵称完全一致 ——
-        for (Cand c : uniq.values()) {
-            if (AWEME_NICKNAME.equals(c.name)) {
-                System.out.println("   精确命中：" + c.name + " -> uid=" + c.id);
-                return c.id;
-            }
-        }
-
-        // —— 二级：清洗后再比 ——
-        String t = clean(AWEME_NICKNAME);
-        for (Cand c : uniq.values()) {
-            if (t.equals(clean(c.name))) {
-                System.out.println("   去表情后命中：" + c.name + " -> uid=" + c.id);
-                return c.id;
-            }
-        }
-
-        // —— 三级：模糊列出候选 ——
+        // —— ③ 仍未命中：模糊列出候选，交人工确认 ——
         System.out.println("   未匹配到「" + AWEME_NICKNAME + "」，唯一 " + uniq.size() + " 个，含关键词的：");
-        String key = AWEME_NICKNAME.substring(0, Math.min(2, AWEME_NICKNAME.length()));
+        String key = clean(AWEME_NICKNAME);
+        key = key.substring(0, Math.min(2, key.length()));
         int i = 1;
         for (Cand c : uniq.values()) {
             if (c.name != null && c.name.contains(key)) {
@@ -456,6 +499,70 @@ public class ProductIdFromVideo {
         }
         throw new IllegalStateException(
                 "请从上面复制正确昵称填 AWEME_NICKNAME，或把数字 uid 填 MANUAL_AWEME_UID 后重跑。");
+    }
+
+    /** 服务端关键词检索（search_key_words），逐页并入候选集合 */
+    private static void collectAuthorizedSearch(
+            QianchuanUniAwemeAuthorizedGetV10Api api, Long adv, String keyword,
+            QianchuanUniAwemeAuthorizedGetV10FilteringMarketingGoal goal,
+            Map<Long, Cand> uniq, int maxPages) throws Exception {
+        QianchuanUniAwemeAuthorizedGetV10Filtering f =
+                new QianchuanUniAwemeAuthorizedGetV10Filtering();
+        f.setMarketingGoal(goal);
+        f.setSearchKeyWords(keyword);
+        for (long page = 1; page <= maxPages; page++) {
+            var resp = api.openApiV10QianchuanUniAwemeAuthorizedGetGet(adv, f, page, 100L);
+            var data = resp == null ? null : resp.getData();
+            var list = data == null ? null : data.getAwemeIdList();
+            if (list == null || list.isEmpty()) {
+                break;
+            }
+            mergeCandidates(list, uniq);
+            if (data.getPageInfo() == null || data.getPageInfo().getTotalPage() == null
+                    || page >= data.getPageInfo().getTotalPage()) {
+                break;
+            }
+        }
+    }
+
+    /** 把一页授权号并入去重集合 */
+    private static void mergeCandidates(
+            List<QianchuanUniAwemeAuthorizedGetV10ResponseDataAwemeIdListInner> list,
+            Map<Long, Cand> uniq) {
+        for (var a : list) {
+            if (a.getAwemeId() != null) {
+                uniq.putIfAbsent(a.getAwemeId(),
+                        new Cand(a.getAwemeId(), a.getAwemeName(), a.getAwemeShowId()));
+            }
+        }
+    }
+
+    /** 三级匹配：抖音号精确 → 昵称全等 → 去 emoji 清洗后相等；不中返回 0 */
+    private static long matchCandidate(Map<Long, Cand> uniq) {
+        if (!MANUAL_DOUYIN_ID.isEmpty()) {
+            for (Cand c : uniq.values()) {
+                if (MANUAL_DOUYIN_ID.equalsIgnoreCase(c.douyinId)) {
+                    System.out.println("   抖音号命中：" + c.douyinId + " -> uid=" + c.id);
+                    return c.id;
+                }
+            }
+        }
+        for (Cand c : uniq.values()) {
+            if (AWEME_NICKNAME.equals(c.name)) {
+                System.out.println("   精确命中：" + c.name + " -> uid=" + c.id);
+                return c.id;
+            }
+        }
+        String t = clean(AWEME_NICKNAME);
+        if (!t.isEmpty()) {
+            for (Cand c : uniq.values()) {
+                if (t.equals(clean(c.name))) {
+                    System.out.println("   去表情后命中：" + c.name + " -> uid=" + c.id);
+                    return c.id;
+                }
+            }
+        }
+        return 0;
     }
 
     /** 拉一个数据源的全部页：首页探测总数 → 并发拉剩余页 */

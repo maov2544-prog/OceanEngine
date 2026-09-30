@@ -1,6 +1,7 @@
 package com.example.oceanengine.ccreate_plan;
 
 import com.bytedance.ads.ApiClient;
+import com.example.oceanengine.client.ApiClients;
 import com.bytedance.ads.ApiException;
 import com.bytedance.ads.api.QianchuanOverallVideoCreateV10Api;
 import com.bytedance.ads.model.QianchuanOverallVideoCreateV10DeliverySettingDeepExternalAction;
@@ -62,6 +63,7 @@ public final class QianchuanOverallVideoCreateService {
         this.accessToken = accessToken;
         ApiClient client = new ApiClient();
         client.setBasePath(BASE_PATH);
+        ApiClients.configure(client);
         if (accessToken != null && !accessToken.isBlank()) {
             client.addDefaultHeader("Access-Token", accessToken);
         }
@@ -110,7 +112,8 @@ public final class QianchuanOverallVideoCreateService {
     public QianchuanOverallVideoCreateV10Request buildRequest(OverallVideoCreateParam param) {
         QianchuanOverallVideoCreateV10Request request = new QianchuanOverallVideoCreateV10Request();
         request.setAdvertiserId(param.getAdvertiserId());
-        request.setName(param.getName());
+        // 平台会拒首尾空格（40000「计划名称不能包含首尾空格」），这里统一去掉
+        request.setName(trimWithNotice(param.getName(), "计划名称"));
         request.setProductIds(param.getProductIds());
         request.setMarketingGoal(toEnum(param.getMarketingGoal(),
                 QianchuanOverallVideoCreateV10MarketingGoal::fromValue, "marketing_goal"));
@@ -230,7 +233,7 @@ public final class QianchuanOverallVideoCreateService {
         for (OverallVideoCreateParam.TitleMaterial item : src) {
             QianchuanOverallVideoCreateV10RequestMultiProductCreativeListInnerTitleMaterialInner inner =
                     new QianchuanOverallVideoCreateV10RequestMultiProductCreativeListInnerTitleMaterialInner();
-            inner.setTitle(item.getTitle());
+            inner.setTitle(trimWithNotice(item.getTitle(), "创意标题"));
             inner.setTitleType(toEnum(item.getTitleType(),
                     QianchuanOverallVideoCreateV10MultiProductCreativeListTitleMaterialTitleType::fromValue,
                     "title_material.title_type"));
@@ -260,7 +263,8 @@ public final class QianchuanOverallVideoCreateService {
         require(param != null, "入参不能为空");
         require(param.getAdvertiserId() != null, "advertiser_id 必填");
         require(notBlank(param.getName()), "name 必填");
-        int nameLength = weightedLength(param.getName());
+        // 长度按 trim 后算：首尾空格平台不认，buildRequest 里会自动去掉
+        int nameLength = weightedLength(param.getName().trim());
         require(nameLength >= 1 && nameLength <= 100,
                 "name 长度需在 1-100 之间（汉字算 2 位），当前 " + nameLength);
         require(param.getProductIds() != null && !param.getProductIds().isEmpty(),
@@ -318,6 +322,27 @@ public final class QianchuanOverallVideoCreateService {
                 require(hasTitle, prefix + "存在非抖音主页视频/图片素材时，至少要有一个 title_material");
             }
         }
+    }
+
+    /**
+     * 去掉字符串首尾空白，并打印提示。
+     *
+     * <p>平台对计划名称会直接拒（{@code 40000 计划名称不能包含首尾空格}），
+     * 标题同理，所以统一在这里规范化，避免白白发一次必然失败的请求。</p>
+     *
+     * @param raw        原始值，null 原样返回
+     * @param fieldLabel 出错时打印用的中文名，如「计划名称」
+     */
+    private static String trimWithNotice(String raw, String fieldLabel) {
+        if (raw == null) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        if (!trimmed.equals(raw)) {
+            System.out.println("⚠ " + fieldLabel + "首尾有空格，已自动去掉："
+                    + "「" + raw + "」→「" + trimmed + "」");
+        }
+        return trimmed;
     }
 
     /** 按平台规则算长度：汉字算 2 位，其余算 1 位。 */

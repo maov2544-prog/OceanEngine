@@ -1,6 +1,7 @@
 package com.example.oceanengine.plant_search;
 
 import com.bytedance.ads.ApiClient;
+import com.example.oceanengine.client.ApiClients;
 import com.bytedance.ads.api.QianchuanUniAwemeAuthorizedGetV10Api;
 import com.bytedance.ads.model.QianchuanUniAwemeAuthorizedGetV10ResponseDataAwemeIdListInner;
 import com.example.oceanengine.client.QianchuanTokenClient;
@@ -76,6 +77,7 @@ public class DiagAweme {
         // 4.5) 查全部已授权号，看 long UID target 是否存在（授权列表含 awemeId 长ID）
         ApiClient pc = new ApiClient();
         pc.setBasePath("https://api.oceanengine.com");
+        ApiClients.configure(pc);
         pc.addDefaultHeader("Access-Token", token);
         QianchuanUniAwemeAuthorizedGetV10Api authApi =
                 new QianchuanUniAwemeAuthorizedGetV10Api(pc);

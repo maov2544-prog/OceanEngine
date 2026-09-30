@@ -1,3 +1,10 @@
 {
-    "java.configuration.updateBuildConfiguration": "interactive"
+    "java.configuration.updateBuildConfiguration": "interactive",
+
+    // VS Code Java 调试器在「工作区有 problem」时会弹
+    //   Build failed, do you want to continue?
+    // 设为 true 直接继续，不再弹框。
+    // 本项目 javac 全量编译是干净的（0 error），JDT 标记里也只有 warning，
+    // 弹框不影响运行，但每次手动点 Continue 很烦。
+    "java.debug.settings.onBuildFailureProceed": true
 }

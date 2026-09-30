@@ -1,6 +1,7 @@
 package com.example.oceanengine.test;
 
 import com.bytedance.ads.ApiClient;
+import com.example.oceanengine.client.ApiClients;
 import com.bytedance.ads.model.QianchuanAwemeUniPromotionOrderGetV10ResponseDataOrderListInner;
 import com.example.oceanengine.client.SuixintuiTokenClient;
 import com.example.oceanengine.service.suixintui.SuixintuiOrderService;
@@ -36,6 +37,7 @@ public class SuixintuiOrderTest {
 
         ApiClient apiClient = new ApiClient();
         apiClient.setBasePath("https://api.oceanengine.com");
+        ApiClients.configure(apiClient);
         apiClient.addDefaultHeader("Access-Token", token);
 
         SuixintuiOrderService service = new SuixintuiOrderService(apiClient, token);

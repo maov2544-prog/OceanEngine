@@ -1,6 +1,7 @@
 package com.example.oceanengine.test;
 
 import com.bytedance.ads.ApiClient;
+import com.example.oceanengine.client.ApiClients;
 import com.bytedance.ads.api.Oauth2AdvertiserGetApi;
 import com.bytedance.ads.api.QianchuanAwemeOrderGetV10Api;
 import com.bytedance.ads.api.QianchuanShopAdvertiserListV10Api;
@@ -33,6 +34,7 @@ public class SuixintuiAccountProbeTest {
 
         ApiClient apiClient = new ApiClient();
         apiClient.setBasePath("https://api.oceanengine.com");
+        ApiClients.configure(apiClient);
         apiClient.addDefaultHeader("Access-Token", token);
 
         LocalDate start = LocalDate.now().minusDays(179);

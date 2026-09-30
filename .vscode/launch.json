@@ -3,6 +3,39 @@
     "configurations": [
         {
             "type": "java",
+            "name": "ProductIdFromVideo",
+            "request": "launch",
+            "mainClass": "com.example.oceanengine.chen.ProductIdFromVideo",
+            "projectName": "oceanengine-demo"
+        },
+        {
+            "type": "java",
+            "name": "CreatePlanDemo",
+            "request": "launch",
+            "mainClass": "com.example.oceanengine.ccreate_plan.CreatePlanDemo",
+            "projectName": "oceanengine-demo"
+        },
+        {
+            "type": "java",
+            "name": "AddFootageDemo",
+            "request": "launch",
+            "mainClass": "com.example.oceanengine.add_footage.AddFootageDemo",
+            "projectName": "oceanengine-demo"
+        },
+        {
+            "type": "java",
+            "name": "AwemeMaterialFinder",
+            "request": "launch",
+            "mainClass": "com.example.oceanengine.ccreate_plan.AwemeMaterialFinder",
+            "projectName": "oceanengine-demo",
+            "args": [
+                "--advertiser-id=1778533513439244",
+                "--aweme-uid=62725463295",
+                "--product-ids=3836535969062977549"
+            ]
+        },
+        {
+            "type": "java",
             "name": "QianchuanDemo",
             "request": "launch",
             "mainClass": "com.example.oceanengine.plant_search.QianchuanDemo",

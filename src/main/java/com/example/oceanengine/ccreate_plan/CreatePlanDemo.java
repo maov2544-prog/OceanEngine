@@ -1,6 +1,8 @@
 package com.example.oceanengine.ccreate_plan;
 
 import com.bytedance.ads.ApiClient;
+import com.bytedance.ads.ApiException;
+import com.example.oceanengine.client.ApiClients;
 import com.bytedance.ads.api.QianchuanUniAwemeAuthorizedGetV10Api;
 import com.bytedance.ads.api.QianchuanVideoGetV10Api;
 import com.bytedance.ads.model.QianchuanOverallVideoCreateV10Request;
@@ -15,9 +17,13 @@ import com.bytedance.ads.model.QianchuanVideoGetV10ResponseData;
 import com.bytedance.ads.model.QianchuanVideoGetV10ResponseDataListInner;
 import com.example.oceanengine.client.QianchuanTokenClient;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * ============================================================================
@@ -33,6 +39,16 @@ import java.util.List;
  *    ③ 打印请求体（DRY_RUN=true）或真实创建计划（DRY_RUN=false）
  *
  *  ⚠ 参数全部写在下面的「配置区」，其他地方不用改。
+ *
+ *  <p>相关类（本类只管「建计划」，查素材的逻辑都拆出去了）：</p>
+ *  <ul>
+ *   <li>{@link AwemeMaterialFinder} ——【获取投放计划可排除抖音视频/图文列表】<br>
+ *       抖音号 + 商品id → 素材id。创建计划前本类<b>自动</b>用它查素材，
+ *       所以改配置区的抖音号 / 商品id，素材id 就跟着变。
+ *       想单独看素材列表可跑 {@code --list-aweme-video}。</li>
+ *   <li>{@link QianchuanOverallVideoCreateService} —— 校验 + 组装请求体 + 真实调用。</li>
+ *   <li>{@link OverallVideoCreateParam} —— 入参 DTO。</li>
+ *  </ul>
  * ============================================================================
  */
 public class CreatePlanDemo {
@@ -46,13 +62,24 @@ public class CreatePlanDemo {
      * false = 真实调用接口创建计划
      * 也可命令行传 --create 强制真实调用
      */
-    private static final boolean DRY_RUN = true;
+    private static final boolean DRY_RUN = false;
 
     /** 投放账号 id（advertiser_id）—— 后台右上角头像旁那个 ID */
-    private static final long ADVERTISER_ID = 1778533513439244L;
+    private static final long ADVERTISER_ID = 1823379540880396L;
 
-    /** 投放计划名称（name），1-100 字符，1 个汉字算 2 位 */
-    private static final String PLAN_NAME = "熙熙丫-澳兰黛青少年洗发水-0929";
+    /** 投放计划名称（name），1-100 字符，1 个汉字算 2 位。首尾不要有空格（平台会拒）。 */
+    private static final String PLAN_NAME = "柚子妈-羊脂膏-9.30";
+
+    /**
+     * true = 在计划名称后自动追加时间戳（{@code -MMddHHmmss}），避免平台返回
+     * {@code 40000「计划名称不能重复」}。
+     *
+     * <p>同一个账户下计划名称<b>不能重复</b>。反复跑同一个 PLAN_NAME 时，
+     * 第一次成功后后面每次都会报「计划名称不能重复」，这时把它打开即可。</p>
+     *
+     * <p>也可命令行传 {@code --unique-name} 临时打开。</p>
+     */
+    private static final boolean PLAN_NAME_AUTO_TIMESTAMP = false;
 
     /**
      * 商品 id 列表（product_ids）—— 抖音商品ID（19位数字），不是你自己系统的商品编号。
@@ -66,7 +93,7 @@ public class CreatePlanDemo {
      *
      * <p>下面这个值来自你后台截图里的商品「【控油去屑】澳兰黛青少年洗发水…」。</p>
      */
-    private static final List<Long> PRODUCT_IDS = List.of(3836535969062977549L);
+    private static final List<Long> PRODUCT_IDS = List.of(3518517808038344366L);
 
     /**
      * 抖音号 id（aweme_uid）—— <b>必须是纯数字 uid</b>，不能填后台那个「抖音号」字符串。
@@ -83,7 +110,7 @@ public class CreatePlanDemo {
      *
      * <p>无号投商城时把 NO_AWEME_ID 设为 true，这里保持 null。</p>
      */
-    private static final Long AWEME_UID = null;
+    private static final Long AWEME_UID =3660744842026395L;
 
     /** 是否为乘方无号投商城（no_aweme_id） */
     private static final boolean NO_AWEME_ID = false;
@@ -94,7 +121,7 @@ public class CreatePlanDemo {
     private static final double BUDGET = 20000D;
 
     /** 支付 ROI 目标（roi2_goal），最多两位小数 */
-    private static final double ROI2_GOAL = 2D;
+    private static final double ROI2_GOAL = 1.9D;
 
     /** 是否开启智能优惠券（qcpx_mode）：QCPX_MODE_ON / QCPX_MODE_OFF / QCPX_MODE_DEFAULT */
     private static final String QCPX_MODE = "QCPX_MODE_ON";
@@ -128,26 +155,58 @@ public class CreatePlanDemo {
 
     // ---------------------------- 视频素材 video_material ----------------
     //
-    //  接口里 video_material 是**数组**：后台显示「共 N 条自选素材」，这里就写 N 条。
-    //  每条素材各自带 image_mode，所以横版/竖版可以混着放。
+    //  ⚠ 这里**不用手填素材id**。创建计划前，程序会自己调
+    //    【获取投放计划可排除抖音视频/图文列表】
+    //    （GET /open_api/v1.0/qianchuan/uni_promotion/block_material/get/），
+    //    用上面的 AWEME_UID + PRODUCT_IDS 查素材，查到什么就用什么。
     //
-    //  三种来源，按实际情况选：
-    //    ① 自选素材 / 素材库视频  → new VideoItem("video_id", "VIDEO_VERTICAL")
-    //       video_id 由【获取视频素材】接口拿
-    //    ② 抖音主页视频          → VideoItem.fromAweme(1234567890123456789L)
-    //       参数是 aweme_item_id（抖音视频ID）
-    //    ③ 需要指定封面时        → new VideoItem(videoId, imageMode).cover("cover_id")
+    //    ⇒ **改抖音号和商品id，素材id 就跟着变**，不用再手工同步。
     //
     //  ⚠ 标题规则（文档原文）：
     //    · 素材全是抖音主页视频 → 不能加标题（TITLE 留空）
     //    · 只要有一条非主页视频/图片 → 至少要有一个标题（TITLE 必填）
     //    标题条数不必等于素材条数，1 个标题可以覆盖多条素材。
 
-    /** 视频素材列表。后台「共N条自选素材」就写 N 条。 */
-    private static final List<VideoItem> VIDEO_MATERIALS = List.of(
-            new VideoItem("v0200fg10000aaaaaaaaaaaa", "VIDEO_VERTICAL"),
-            new VideoItem("v0200fg10000bbbbbbbbbbbb", "VIDEO_VERTICAL"),
-            new VideoItem("v0200fg10000cccccccccccc", "VIDEO_VERTICAL"));
+    /**
+     * 查到的素材，往 video_material 里填哪个字段：
+     *
+     * <ul>
+     *   <li>{@code "AWEME_ITEM_ID"}（当前）—— 填 {@code aweme_item_id}（抖音视频ID，纯数字）。
+     *       接口查出来的这批本来就是<b>抖音主页视频</b>，用这个才对口；
+     *       本地校验会判定「全为主页视频」，此时 {@link #TITLE} <b>必须留空</b>。</li>
+     *   <li>{@code "VIDEO_ID"} —— 填 {@code video_id}（千川视频id，形如 v0200fg10000...）。
+     *       平台会当成「非主页视频」，那 {@link #TITLE} <b>必须至少填一条</b>，
+     *       否则本地校验直接拦下。</li>
+     * </ul>
+     *
+     * <p>也可命令行传 {@code --material-field=video_id} / {@code --material-field=aweme_item_id} 覆盖。</p>
+     */
+    private static final String MATERIAL_ID_FIELD = "AWEME_ITEM_ID";
+
+    /**
+     * 接口返回的素材最多用前 N 条；<b>0 = 全部使用</b>（当前）。
+     *
+     * <p>⚠ 接口给的是「这个抖音号下<b>能投这个商品的全部素材</b>」，不是「你在后台勾选的那几条」。
+     * 如果查到条数明显多于后台显示的数量，把这个值改成正数即可截断。</p>
+     */
+    private static final int MATERIAL_LIMIT = 0;
+
+    /**
+     * 精确指定这次要投哪几条素材（<b>aweme_item_id 白名单</b>）。
+     *
+     * <p>留空（默认）= 接口返回什么就投什么，即「全用」，行为与不带本项时完全一致。</p>
+     *
+     * <p>为什么需要它：{@code block_material/get} 给的是<b>候选池</b>（该抖音号下能投该商品的全部素材），
+     * 而不是你在千川后台勾选的那几条。{@link #MATERIAL_LIMIT} 只能「取前 N 条」，顺序不由你控制；
+     * 想和后台完全一致，就把后台那几条的 aweme_item_id 抄到这里。</p>
+     *
+     * <p>填了之后，只有同时出现在「接口候选池」和本列表里的素材才会被投；
+     * 若某条不在池子里，会打印 ⚠ 提示并跳过（不会因此报错）。</p>
+     *
+     * <p>也可命令行临时指定：{@code --pick-ids=id1,id2,id3}。</p>
+     */
+    private static final List<Long> MATERIAL_PICK = List.of();
+
 
     /** 一条视频素材：video_id 与 aweme_item_id 二选一。 */
     private record VideoItem(String videoId, String imageMode, Long awemeItemId, String videoCoverId) {
@@ -167,8 +226,14 @@ public class CreatePlanDemo {
         }
     }
 
-    /** 创意标题（title），10-110 字符，汉字算 2 位。全部素材为主页视频时留空。 */
-    private static final String TITLE = "这个价格真的太香了，闭眼入不踩雷";
+    /**
+     * 创意标题（title），10-110 字符，汉字算 2 位。
+     *
+     * <p><b>当前留空是必须的</b>：上面 3 条素材全是抖音主页视频，
+     * 文档规定「如果素材全都是抖音主页视频，不支持添加标题」。
+     * 将来换成非主页视频（素材库视频/图片）时，这里必须至少填 1 条标题，否则素材不生效。</p>
+     */
+    private static final String TITLE = "";
 
     /** 标题类型（title_type）：CUSTOM 自定义标题 / COMMODITY_CARD 商品卡标题 */
     private static final String TITLE_TYPE = "CUSTOM";
@@ -177,9 +242,48 @@ public class CreatePlanDemo {
     // 主流程
     // ========================================================================
 
-    public static void main(String[] args) throws Exception {
+    /**
+     * 入口。配置类错误（{@link IllegalStateException}）只打印一行提示，不打栈——
+     * 那些都是「值没填对」，不是代码 bug，抛栈只会让人误以为程序坏了。
+     *
+     * <pre>
+     * 常用命令行开关：
+     *   --dry-run              只看请求体，不下单（DRY_RUN=false 时也能安全预览）
+     *   --create               强制真实下单（忽略 DRY_RUN）
+     *   --unique-name          计划名称自动加时间戳，避免 40000「计划名称不能重复」
+     *   --pick-ids=id1,id2     只投这几条素材（aweme_item_id 白名单），默认全用
+     *   --material-field=...   取 aweme_item_id（默认）还是 video_id
+     * </pre>
+     */
+    public static void main(String[] args) {
+        try {
+            run(args);
+        } catch (IllegalStateException e) {
+            System.out.println();
+            System.out.println("❌ " + e.getMessage());
+        } catch (Exception e) {
+            System.out.println();
+            System.out.println("❌ 运行出错：" + e.getClass().getSimpleName() + " " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
 
-        // 辅助模式：查千川素材库视频，拿 video_id 填 VIDEO_MATERIALS
+    private static void run(String[] args) throws Exception {
+
+        // 辅助模式：按「抖音号 + 商品id」找可投的抖音视频/图文素材
+        //   实现在独立类 AwemeMaterialFinder —— 接口【获取投放计划可排除抖音视频/图文列表】
+        //   --list-aweme-video                    用配置区的 AWEME_UID + PRODUCT_IDS
+        //   --list-aweme-video=uid,productId      显式指定（多商品用逗号续写）
+        //   --aweme-uid=数字 --product-ids=a,b     也可以分开传
+        //   --media-type=CAROUSEL                 图文（默认 VIDEO）
+        //   --order=PLAY_CNT                      排序：CREATE_TIME/PLAY_CNT/LIKE_CNT/STAT_COST
+        //   --limit=N                             只取前 N 条
+        if (hasArg(args, "--list-aweme-video") || hasArg(args, "--aweme-uid")) {
+            AwemeMaterialFinder.run(ADVERTISER_ID, AWEME_UID, PRODUCT_IDS, args);
+            return;
+        }
+
+        // 辅助模式：查千川素材库视频（只是想翻素材库时用，跟建计划无关）
         //   --list-video                    列出素材库视频
         //   --list-video=洗发水              文件名关键词过滤（客户端过滤，服务端不支持按名字查）
         //   --video-ids=id1,id2,id3         按 video_id 批量查（<=100）
@@ -210,7 +314,16 @@ public class CreatePlanDemo {
             }
         }
 
-        boolean dryRun = DRY_RUN && !hasFlag(args, "--create");
+        // 是否只打印请求体不下单：
+        //   默认跟随 DRY_RUN 常量；--dry-run 强制预览；--create 强制真实调用
+        boolean dryRun;
+        if (hasFlag(args, "--dry-run")) {
+            dryRun = true;
+        } else if (hasFlag(args, "--create")) {
+            dryRun = false;
+        } else {
+            dryRun = DRY_RUN;
+        }
 
         // ---------- ⓪ 前置校验 ----------
         if (ADVERTISER_ID == 123456L || ADVERTISER_ID == 0L) {
@@ -229,12 +342,15 @@ public class CreatePlanDemo {
         System.out.println("⓪ 使用账户 ID = " + ADVERTISER_ID);
 
         // ---------- ① 组装入参 ----------
-        OverallVideoCreateParam param = buildParam();
-        System.out.println("① 计划名称     = " + PLAN_NAME);
+        // 素材：自动按 AWEME_UID + PRODUCT_IDS 查，不用手工填
+        List<VideoItem> materials = resolveVideoMaterials(args);
+        String planName = resolvePlanName(args);
+        OverallVideoCreateParam param = buildParam(materials, planName);
+        System.out.println("① 计划名称     = " + planName);
         System.out.println("   商品ID       = " + PRODUCT_IDS);
         System.out.println("   抖音号uid    = " + (NO_AWEME_ID ? "(无号投商城)" : String.valueOf(AWEME_UID)));
         System.out.println("   预算/ROI     = " + BUDGET + " / " + ROI2_GOAL);
-        System.out.println("   视频素材     = " + VIDEO_MATERIALS.size() + " 条"
+        System.out.println("   视频素材     = " + materials.size() + " 条"
                 + (blankToNull(TITLE) == null ? "，无标题" : "，标题 1 条"));
 
         // ---------- ② 校验 + 组装请求体（dry-run 不需要 token）----------
@@ -264,7 +380,19 @@ public class CreatePlanDemo {
         }
 
         System.out.println("③ 真实调用 ===");
-        CreatePlanResult result = service.create(param);
+        CreatePlanResult result;
+        try {
+            result = service.create(param);
+        } catch (ApiException e) {
+            // 平台侧业务报错（如 40000 计划名称不能重复 / 参数非法）会走到这里，
+            // 打成可读的一行，避免直接抛栈让人只看到 exit=1。
+            System.out.println("❌ 接口返回异常 code=" + e.getCode());
+            System.out.println("   " + firstLine(e.getResponseBody() != null
+                    ? e.getResponseBody() : e.getMessage()));
+            System.out.println("   常见原因：计划名称重复 / 首尾空格 / 必填缺失 / 素材不合法。");
+            System.out.println("   名称重复可加 --unique-name 或打开 PLAN_NAME_AUTO_TIMESTAMP。");
+            return;
+        }
         System.out.println(result);
 
         if (!result.isSuccess()) {
@@ -276,10 +404,152 @@ public class CreatePlanDemo {
     }
 
     // ========================================================================
+    // 素材来源：手工配置区  or  接口自动查（AwemeMaterialFinder）
+    // ========================================================================
+
+    /**
+     * 查素材：调 {@link AwemeMaterialFinder}（接口【获取投放计划可排除抖音视频/图文列表】），
+     * 用配置区的 {@link #AWEME_UID} + {@link #PRODUCT_IDS} 查，查到什么就用什么。
+     *
+     * <p>⇒ <b>改抖音号 / 商品id，素材id 自动跟着变</b>，不用再手工同步。</p>
+     *
+     * <p>取接口的哪一列由 {@link #MATERIAL_ID_FIELD} 决定，
+     * 命令行 {@code --material-field=video_id|aweme_item_id} 可临时覆盖。</p>
+     */
+    private static List<VideoItem> resolveVideoMaterials(String[] args) throws Exception {
+
+        String field = argValue(args, "material-field");
+        if (blankToNull(field) == null) {
+            field = MATERIAL_ID_FIELD;
+        }
+        boolean byVideoId = "VIDEO_ID".equalsIgnoreCase(field.trim());
+        String mediaType = argValue(args, "media-type");
+
+        System.out.println("⚙ 查素材：【获取投放计划可排除抖音视频/图文列表】");
+        System.out.println("   aweme_uid=" + AWEME_UID
+                + "  product_ids=" + PRODUCT_IDS
+                + "  media_type=" + (mediaType == null ? "VIDEO" : mediaType.toUpperCase())
+                + "  取字段=" + (byVideoId ? "video_id" : "aweme_item_id"));
+
+        List<AwemeMaterialFinder.Material> found = AwemeMaterialFinder.find(
+                ADVERTISER_ID,
+                AWEME_UID,
+                PRODUCT_IDS,
+                mediaType,
+                argValue(args, "order"));
+
+        if (found.isEmpty()) {
+            throw new IllegalStateException(
+                    "按 aweme_uid=" + AWEME_UID + " + product_ids=" + PRODUCT_IDS
+                            + " 查到 0 条素材。确认这两个值是否匹配、该抖音号是否已授权给本账户，"
+                            + "可先用 --list-aweme-video 单独看一眼。");
+        }
+
+        // 白名单过滤：只投 MATERIAL_PICK / --material-ids 指定的几条（默认空 = 全用）
+        found = applyMaterialPick(found, args);
+        if (found.isEmpty()) {
+            throw new IllegalStateException(
+                    "白名单过滤后一条素材都不剩。MATERIAL_PICK 里填的 aweme_item_id "
+                            + "都不在接口返回的候选池里，检查是否抄错、或抖音号/商品id 是否配对。");
+        }
+
+        if (MATERIAL_LIMIT > 0 && found.size() > MATERIAL_LIMIT) {
+            System.out.println("   接口返回 " + found.size() + " 条，按 MATERIAL_LIMIT="
+                    + MATERIAL_LIMIT + " 只取前 " + MATERIAL_LIMIT + " 条");
+            found = found.subList(0, MATERIAL_LIMIT);
+        }
+
+        System.out.println("   查到 " + found.size() + " 条素材：");
+        for (int i = 0; i < found.size(); i++) {
+            AwemeMaterialFinder.Material m = found.get(i);
+            System.out.printf("     %2d. aweme_item_id=%-22s video_id=%-32s %s%n",
+                    i + 1,
+                    m.awemeItemId() == null ? "-" : String.valueOf(m.awemeItemId()),
+                    m.videoId() == null ? "-" : m.videoId(),
+                    m.imageMode());
+        }
+
+        List<VideoItem> items = toVideoItems(found, byVideoId);
+        if (items.isEmpty()) {
+            throw new IllegalStateException("接口返回 " + found.size()
+                    + " 条素材，但没有一条带 " + (byVideoId ? "video_id" : "aweme_item_id")
+                    + "，换个 --material-field 试试。");
+        }
+        System.out.println("   → 转成 " + items.size() + " 条 video_material");
+        return items;
+    }
+
+    /**
+     * 按白名单过滤素材：命令行 {@code --pick-ids=id1,id2} 优先，其次配置区 {@link #MATERIAL_PICK}。
+     * 两者都为空时原样返回（= 全用）。
+     */
+    private static List<AwemeMaterialFinder.Material> applyMaterialPick(
+            List<AwemeMaterialFinder.Material> found, String[] args) {
+
+        String raw = argValue(args, "pick-ids");
+        List<Long> pick = blankToNull(raw) == null ? MATERIAL_PICK : splitLongCsv(raw);
+        if (pick == null || pick.isEmpty()) {
+            return found;
+        }
+
+        Set<Long> missing = new LinkedHashSet<>(pick);
+        List<AwemeMaterialFinder.Material> kept = new ArrayList<>(found.size());
+        for (AwemeMaterialFinder.Material m : found) {
+            if (m.awemeItemId() != null && missing.remove(m.awemeItemId())) {
+                kept.add(m);
+            }
+        }
+        System.out.println("   白名单 " + pick.size() + " 条 → 命中 " + kept.size()
+                + " 条（接口候选池共 " + found.size() + " 条）");
+        if (!missing.isEmpty()) {
+            System.out.println("   ⚠ 这几条不在候选池里，已跳过：" + missing);
+        }
+        return kept;
+    }
+
+    /** 接口返回的 {@link AwemeMaterialFinder.Material} → 配置区用的 {@link VideoItem}。 */
+    private static List<VideoItem> toVideoItems(List<AwemeMaterialFinder.Material> found,
+                                                boolean byVideoId) {
+        List<VideoItem> out = new ArrayList<>(found.size());
+        for (AwemeMaterialFinder.Material m : found) {
+            if (byVideoId) {
+                if (blankToNull(m.videoId()) == null) {
+                    continue;
+                }
+                out.add(new VideoItem(m.videoId(), m.imageMode()));
+            } else {
+                if (m.awemeItemId() == null) {
+                    continue;
+                }
+                // 抖音主页视频：只填 aweme_item_id，不填 video_id
+                out.add(new VideoItem(null, m.imageMode(), m.awemeItemId(), null));
+            }
+        }
+        return out;
+    }
+
+    // ========================================================================
     // 把配置区常量组装成入参对象（一般不用改）
     // ========================================================================
 
-    private static OverallVideoCreateParam buildParam() {
+    /**
+     * 算出这次用的计划名称。
+     *
+     * <p>同一个账户下计划名称<b>不能重复</b>（平台返回 {@code 40000「计划名称不能重复」}）。
+     * {@link #PLAN_NAME_AUTO_TIMESTAMP} 打开（或命令行 {@code --unique-name}）时，
+     * 自动追加 {@code -MMddHHmmss} 保证唯一。</p>
+     */
+    private static String resolvePlanName(String[] args) {
+        if (!PLAN_NAME_AUTO_TIMESTAMP && !hasFlag(args, "--unique-name")) {
+            return PLAN_NAME;
+        }
+        String name = PLAN_NAME + "-" + LocalDateTime.now()
+                .format(DateTimeFormatter.ofPattern("MMddHHmmss"));
+        System.out.println("ℹ 计划名称自动加时间戳（避免重名）→ " + name);
+        return name;
+    }
+
+    private static OverallVideoCreateParam buildParam(List<VideoItem> videoMaterials, String planName) {
 
         OverallVideoCreateParam.DeliverySetting deliverySetting =
                 new OverallVideoCreateParam.DeliverySetting()
@@ -296,9 +566,9 @@ public class CreatePlanDemo {
                                 .starTaskMaterialSwitch(STAR_TASK_MATERIAL_SWITCH)
                                 .allianceCommisionSwitch(ALLIANCE_COMMISION_SWITCH));
 
-        // 视频素材：N 条配置 → N 个 video_material 元素
-        List<OverallVideoCreateParam.VideoMaterial> videos = new ArrayList<>(VIDEO_MATERIALS.size());
-        for (VideoItem v : VIDEO_MATERIALS) {
+        // 视频素材：N 条 → N 个 video_material 元素
+        List<OverallVideoCreateParam.VideoMaterial> videos = new ArrayList<>(videoMaterials.size());
+        for (VideoItem v : videoMaterials) {
             videos.add(new OverallVideoCreateParam.VideoMaterial()
                     .imageMode(v.imageMode())
                     .videoId(blankToNull(v.videoId()))
@@ -324,7 +594,7 @@ public class CreatePlanDemo {
 
         return new OverallVideoCreateParam()
                 .advertiserId(ADVERTISER_ID)
-                .name(PLAN_NAME)
+                .name(planName)
                 .productIds(PRODUCT_IDS)
                 .deliverySetting(deliverySetting)
                 .multiProductCreativeList(creativeItems);
@@ -332,6 +602,16 @@ public class CreatePlanDemo {
 
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /** 取多行文本的第一行（接口报错时响应体可能很长，只留首行摘要）。 */
+    private static String firstLine(String text) {
+        if (text == null) {
+            return "(无响应体)";
+        }
+        int idx = text.indexOf('\n');
+        String line = idx < 0 ? text : text.substring(0, idx);
+        return line.length() > 500 ? line.substring(0, 500) + "…" : line;
     }
 
     private static boolean hasFlag(String[] args, String flag) {
@@ -355,6 +635,7 @@ public class CreatePlanDemo {
         }
 
         ApiClient client = new ApiClient();
+        ApiClients.configure(client);
         client.addDefaultHeader("Access-Token", token);
         QianchuanUniAwemeAuthorizedGetV10Api api =
                 new QianchuanUniAwemeAuthorizedGetV10Api(client);
@@ -434,7 +715,15 @@ public class CreatePlanDemo {
     }
 
     // ========================================================================
-    // 辅助：查千川素材库视频（拿 video_id 填 VIDEO_MATERIALS）
+    // 按「抖音号 + 商品id」找可投的抖音视频/图文素材
+    //   已拆成独立类：{@link AwemeMaterialFinder}
+    //   接口：GET /open_api/v1.0/qianchuan/uni_promotion/block_material/get/
+    //   文档：【获取投放计划可排除抖音视频/图文列表】
+    //   入口：本类创建计划时自动调用；想单独看列表可跑 --list-aweme-video。
+    // ========================================================================
+
+    // ========================================================================
+    // 辅助：查千川素材库视频（只是想翻素材库时用，跟建计划无关）
     //   接口：GET https://ad.oceanengine.com/open_api/v1.0/qianchuan/video/get/
     // ========================================================================
 
@@ -463,6 +752,7 @@ public class CreatePlanDemo {
         // ⚠ 这个接口的域名是 ad.oceanengine.com，SDK 默认是 api.oceanengine.com，必须显式改
         ApiClient client = new ApiClient();
         client.setBasePath(AD_HOST);
+        ApiClients.configure(client);
         client.addDefaultHeader("Access-Token", token);
         QianchuanVideoGetV10Api api = new QianchuanVideoGetV10Api(client);
 
@@ -544,7 +834,7 @@ public class CreatePlanDemo {
                 imageModes, tags, sources, start, end, filtered ? keyword : null));
         System.out.println();
         System.out.printf("%-30s %-15s %-9s %-12s %s%n",
-                "video_id(填 VIDEO_MATERIALS)", "image_mode", "时长(s)", "上传日期", "文件名");
+                "video_id", "image_mode", "时长(s)", "上传日期", "文件名");
         System.out.println("-".repeat(120));
 
         int total = 0;
@@ -608,7 +898,7 @@ public class CreatePlanDemo {
             }
             scope.append("）");
         }
-        System.out.println(scope + "。把第一列的 video_id 填到 VIDEO_MATERIALS。");
+        System.out.println(scope + "。");
     }
 
     /** 抽出来是为了让上面的主循环读起来干净。 */
