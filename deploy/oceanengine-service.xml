@@ -1,0 +1,78 @@
+<service>
+
+  <!-- ============================================================
+       OceanEngine 随心推追投服务 —— WinSW 服务定义
+
+       文件名必须与 WinSW 可执行文件同名（去掉 .exe）：
+         D:\oceanengine\oceanengine-service.exe
+         D:\oceanengine\oceanengine-service.xml   ← 本文件
+
+       WinSW 下载：https://github.com/winsw/winsw/releases
+         无 .NET 环境 → 用 WinSW-x64.exe（自包含，约 17MB）
+         有 .NET Framework 4.6.1+ → 可用 WinSW.NET461.exe（约 0.6MB）
+       下载后重命名为 oceanengine-service.exe
+       ============================================================ -->
+
+  <id>oceanengine</id>
+  <name>OceanEngine Reinvest</name>
+  <description>随心推追投服务（千川全域订单加预算定时任务）</description>
+
+  <!-- ⚠️ 唯一需要按目标电脑修改的地方：JDK 17 的实际路径。
+       可用 where.exe java 确认。也可写成 %JAVA_HOME%\bin\java.exe，
+       但那样依赖 JAVA_HOME 是已配置的系统变量。 -->
+  <executable>C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot\bin\java.exe</executable>
+
+  <!-- 固定工作目录，避免相对路径随服务启动方式漂移 -->
+  <workingdirectory>D:\oceanengine</workingdirectory>
+
+  <!-- 业务参数（账户、金额、间隔、投放时长、ROI、dry-run）全部在
+       D:\oceanengine\config\application.yml 里改，改完重启服务生效。
+       如需命令行临时覆盖，可在下面这行末尾追加 Spring 命令行参数，
+       前缀是两个连字符，写法与 config\application.yml 里的配置项名一致。
+       ⚠️ 覆盖值优先级高于 yml，排查配置不生效时先检查这里。 -->
+  <arguments>-jar "D:\oceanengine\oceanengine-1.0-SNAPSHOT.jar" --spring.config.additional-location=file:D:/oceanengine/config/</arguments>
+
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+
+  <!-- Token 故意不在这里配置。
+       服务进程会继承 Windows 的“系统”环境变量，java 通过
+       System.getenv("QIANCHUAN_SERVICE_BEARER_TOKEN") 直接读到。
+       必须配置成“系统变量”而非“用户变量”，否则 LocalSystem 账户读不到。
+
+       不要改写成 <env name="..." value="%QIANCHUAN_SERVICE_BEARER_TOKEN%"/>：
+       变量未定义时 WinSW 不做替换，会把字面量当成令牌传下去，
+       报出来的是“HTTP 状态码：401”而不是“未配置环境变量”，更难排查。 -->
+
+  <!-- 默认 15 秒太短：一轮要取 Token + 遍历全部账户，可能跑几分钟。
+       WinSW 会先给 JVM 发 Ctrl+C 让它优雅退出，超过这个时间才强杀。 -->
+  <stoptimeout>120 sec</stoptimeout>
+
+  <!-- 进程非 0 退出时每 60 秒重启一次；连续运行满 1 小时后失败计数归零。
+       注意：配置校验失败也会以非 0 退出，会形成每 60 秒重启一次的现象，
+       日志持续报同一条校验错误——此时应去看日志里的校验信息，
+       不要怀疑 Token 或网络。 -->
+  <onfailure action="restart" delay="60 sec"/>
+  <resetfailure>1 hour</resetfailure>
+
+  <!-- 这里只捕获 java 进程的 stdout / stderr，落到
+         oceanengine-service.out.log / oceanengine-service.err.log
+       与 logback 写的 application.log 是不同文件，不会互相干扰。
+       容量单位 KB：10240 = 10MB，与 logback 的 max-file-size 保持一致。
+       注意：业务输出全部落在这里（应用代码里没有任何 Logger 调用），
+       所以追投记录的留存时长由 keepFiles 决定，而不是 logback 的 rollingpolicy。
+       实测约 650KB/天：30 个文件约 300MB，够存约 1 年。 -->
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>30</keepFiles>
+  </log>
+  <logpath>D:\oceanengine\logs</logpath>
+
+  <!-- 默认以 LocalSystem 运行，能看到系统环境变量。
+       如需改用专用账户，取消注释并填入账号密码：
+  <serviceaccount>
+    <username>.\oceanengine</username>
+    <password>明文密码</password>
+  </serviceaccount>
+  -->
+</service>

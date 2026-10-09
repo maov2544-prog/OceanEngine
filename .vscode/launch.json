@@ -3,17 +3,46 @@
     "configurations": [
         {
             "type": "java",
-            "name": "SuixintuiUniOrderDetailTest",
+            "name": "ReinvestApplication",
             "request": "launch",
-            "mainClass": "com.example.oceanengine.test.suixintui.SuixintuiUniOrderDetailTest",
+            "mainClass": "com.aolandai.oceanengine.launcher.ReinvestApplication",
             "projectName": "oceanengine-demo"
         },
         {
             "type": "java",
-            "name": "ReinvestApplication",
+            "name": "ReinvestApplication（常驻）",
             "request": "launch",
-            "mainClass": "com.example.oceanengine.launcher.ReinvestApplication",
-            "projectName": "oceanengine-demo"
+            "mainClass": "com.aolandai.oceanengine.launcher.ReinvestApplication",
+            "projectName": "oceanengine"
+        },
+        {
+            "type": "java",
+            "name": "ReinvestApplication（单轮 dry-run）",
+            "request": "launch",
+            "mainClass": "com.aolandai.oceanengine.launcher.ReinvestApplication",
+            "projectName": "oceanengine",
+            "args": "--suixintui.reinvest.run-once=true --suixintui.reinvest.dry-run=true"
+        },
+        {
+            "type": "java",
+            "name": "工具：追投候选筛选",
+            "request": "launch",
+            "mainClass": "com.aolandai.oceanengine.suixintui.SuixintuiUniOrderDetailTest",
+            "projectName": "oceanengine"
+        },
+        {
+            "type": "java",
+            "name": "工具：加预算（真实扣费，谨慎）",
+            "request": "launch",
+            "mainClass": "com.aolandai.oceanengine.suixintui.SuixintuiBudgetAddTest",
+            "projectName": "oceanengine"
+        },
+        {
+            "type": "java",
+            "name": "工具：单订单详情查询",
+            "request": "launch",
+            "mainClass": "com.aolandai.oceanengine.tools.SuixintuiOrderDetailTest",
+            "projectName": "oceanengine"
         }
     ]
 }

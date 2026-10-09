@@ -2,6 +2,8 @@ target/
 data/
 output/
 outputs/
+# AI 助手的工作目录（项目记忆、任务记录等），不入版本库
+.workbuddy-ai/
 cp.txt
 *.log
 *.jsonl

@@ -12,8 +12,8 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.example</groupId>
-    <artifactId>oceanengine-demo</artifactId>
+    <groupId>com.aolandai</groupId>
+    <artifactId>oceanengine</artifactId>
     <version>1.0-SNAPSHOT</version>
 
     <properties>
@@ -56,6 +56,18 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <!--
+          Apache POI（HSSF）：读写 Excel 97-2003 .xls（BIFF8）。
+          日报要基于 .xls 模板填写并另存，而 BIFF8 是二进制复合文档格式，
+          没有 POI 就只能手写 OLE2 + BIFF 记录，不现实。
+          只用到 HSSF（.xls），所以引 poi 即可，不需要 poi-ooxml（那是 .xlsx 用的）。
+          ⚠️ POI 不在本机 m2 缓存里，第一次构建需要联网（Maven Central）。
+        -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi</artifactId>
+            <version>5.3.0</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

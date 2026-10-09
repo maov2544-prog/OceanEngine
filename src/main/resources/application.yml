@@ -1,9 +1,12 @@
 server:
   port: 8080
+  # 整个 Web 服务只绑回环网卡。本项目没有任何业务 HTTP 接口，8080 上唯一对外的东西
+  # 就是 /actuator/health，所以这一行等价于「健康检查只对本机开放」。
+  # 不设则绑 0.0.0.0，任何能连到 8080 的机器都能读到 UP/DOWN（即最近一轮追投是否出错）。
+  # 注意：不要改用 management.server.address —— 那要求 actuator 单独占一个端口，否则启动直接失败。
+  address: 127.0.0.1
 
 management:
-  server:
-    address: 127.0.0.1
   endpoints:
     web:
       exposure:
@@ -12,17 +15,42 @@ management:
     health:
       # 仅暴露 UP/DOWN，避免向未鉴权端点泄露订单和轮次信息
       show-details: never
-
 suixintui:
   reinvest:
     api-base-url: https://api.oceanengine.com
-    # 固定的一批千川业务账户 ID（随心推投放账户 id）
-    advertiser-ids:
-      - 1779106144470100
+    # 账户按「档次」分组：每个档次自带一个「单账户每日金额上限」。
+    # 档次是账户的唯一来源（没有单独的顶层账户列表），getAdvertiserIds() 由这里展平派生。
+    #
+    # ⚠️ 这是列表，外部配置会「整体替换」而不是合并：在目标机 config/application.yml 里
+    #    写 advertiser-tiers 时必须把全部档次和账户都写全，漏掉的会被静默丢弃（不报错）。
+    # ⚠️ 档次顺序 = 每轮的账户扫描顺序。单轮额度是先到先得，靠前的账户优先花。
+    advertiser-tiers:
+      - name: 10000档
+        max-amount-per-advertiser-per-day: 10000
+        advertiser-ids:
+          #婴童【青少年-商品】
+          - 1779106144470100
+          #婴童【儿童-商品】
+          - 1778533513439244
+          #官方【青少年-商品】
+          - 1776098375039040
+          #官方【孕产-商品】
+          - 1771298760893511
+          #官方【婴童-商品】
+          - 1795656569312393
+      - name: 20000档
+        max-amount-per-advertiser-per-day: 20000
+        advertiser-ids:
+          #官方【母婴商品】
+          - 1823379540880396
+      # 预留档：账户暂时为空，后续补账户时只在这里加 advertiser-ids 即可，不用动代码
+      - name: 15000档
+        max-amount-per-advertiser-per-day: 15000
+        advertiser-ids: []
     # 轮次间隔（毫秒）：每 10 分钟一轮；fixedDelay 语义 = 上一轮结束后再等这么久
     interval-ms: 600000
     # 启动后多久执行第一轮（毫秒）
-    initial-delay-ms: 10000
+    initial-delay-ms: 5000
     # 每次拉取「创建时间近 N 天」的订单
     window-days: 7
     # 每单追加金额（元）
@@ -30,25 +58,167 @@ suixintui:
     # 追加投放时长（小时），官方允许 24/48/72/96/120/144/168
     delivery-time: 24
     # 筛选阈值：净成交 ROI ≥ min-roi
-    min-roi: 2.0
-    # 筛选阈值：整体消耗 / 投放总金额 ≥ min-budget-used-ratio
-    min-budget-used-ratio: 0.5
+    min-roi: 1.8
+    # 筛选阈值：整体消耗下限（元）。低于这个值的订单直接不追投。
+    # 理由：消耗太少还没跑出有效数据；且它们的分支②((2×C_now−C_prev)/B) 容易因增量占比虚高而误触发。
+    # 边界：正好等于下限保留；消耗为 null 排除。
+    min-stat-cost: 100
+    # 筛选阈值（两分支 OR，任一成立即达标；ROI 条件两者都必须满足）：
+    #   ① 使用率     = 整体消耗 / 投放总金额                            ≥ 本值
+    #   ② 增强使用率 = (2×本轮整体消耗 − 上一轮整体消耗) / 投放总金额   ≥ 本值
+    # 分支②的数据来自 consume-snapshot-path 的快照（上一轮的值）。
+    min-budget-used-ratio: 0.8
+    # ==================== 第二条路径（ROAS，2026-10-05） ====================
+    # 与上面的「使用率」判定是 OR 关系（任一成立即纳入，不替代）。启用后额外纳入：
+    #   消耗 / 投放总金额       ≥ roas-min-usage-ratio      （跑量：钱花得差不多了）
+    #   净成交金额 / 投放总金额 ≥ ROI 门槛                   （效果：换回足够净成交）
+    # 注意第二个门槛不单独配：复用 min-roi + product-roi-overrides（各自商品的门槛）。
+    # ⚠️ roas-rule-enabled: false 时第二条路径完全不参与判定，行为与改造前完全一致。
+    roas-rule-enabled: true
+    roas-min-usage-ratio: 0.5
     # ROI 口径：OVERALL_PAY_ROI（整体支付）/ SETTLE_ROI（净成交）
     roi-metric: SETTLE_ROI
+    # 商品级 ROI 门槛覆盖（2026-10-04）：少量特定商品要更高的 ROI 才允许追投。
+    # 命中商品 → 用这里配的阈值；未命中（含拿不到商品ID）→ 回退上面的 min-roi。
+    # 配的值可高于也可低于 min-roi（纯覆盖，不校验方向）。
+    # ⚠️ 这是 Map，外部配置「整体替换」而不是合并；整个 key 不写 = 功能不生效（行为与改造前一致）。
+    # ⚠️ 启动横幅会打印实际生效的映射（「商品级 ROI 门槛:」一行），防漏配靠人工核对它。
+    product-roi-overrides:
+      3686032876161335490: 6
     # 资金安全护栏：PENDING/UNKNOWN 按“可能已经支出”占用额度
-    max-amount-per-order-per-day: 600
-    max-amount-per-advertiser-per-day: 5000
-    max-amount-per-round: 1000
-    max-reinvest-count-per-order-per-day: 3
-    cooldown-minutes: 60
-    # 幂等流水文件（JSONL，重启自动恢复；生产建议改为绝对路径并挂载持久卷）
-    record-store-path: ./data/reinvest-records.jsonl
-    instance-lock-path: ./data/reinvest.lock
+    # 单账户每日金额上限已按档次配置，见上面的 advertiser-tiers，此处不再有全局值
+    #单订单每天金额上限
+    max-amount-per-order-per-day: 1200
+    #单轮总金额上限（所有账户共享；一轮用满后，本轮后续账户的候选都会被拒）
+    max-amount-per-round: 30000
+    #单订单每天追投次数上限
+    max-reinvest-count-per-order-per-day: 6
+    # 对同一个订单（orderId），两次追投之间至少间隔 10 分钟，未满 10 分钟的本轮跳过
+    cooldown-minutes: 10
+    # 幂等流水文件（JSONL，重启自动恢复）。必须用绝对路径：用相对路径会随工作目录漂移，
+    # 重启后读不到历史记录，幂等与限额判断会失效，可能造成重复追投。
+    # 目录不存在时程序会自动创建，无需预先建好。
+    record-store-path: D:/oceanengine/data/reinvest-records.jsonl
+    # 「每轮每单整体消耗」快照（JSONL）。分支②要算 (2×本轮消耗−上一轮消耗)/投放总金额，
+    # 官方接口只给当前累计消耗，所以上一轮的值必须自己存。每个订单只保留最新一条。
+    # ⚠️ 同样必须绝对路径；文件损坏会导致启动失败（快照丢失会让分支②门槛从 80% 降到 40%，
+    #    可能多花钱，所以宁可停摆也不带病运行）。
+    consume-snapshot-path: D:/oceanengine/data/reinvest-consume-snapshot.jsonl
+    # 快照保留天数：超过这个天数没更新的订单快照会被清理，避免文件无限增长
+    snapshot-retention-days: 7
+    # 注：「上一轮消耗」缺失时（服务重启后第一轮 / 订单首次出现 / 快照丢失）按
+    #     「本轮增量 = 0」处理 → 分支② 退化为只判使用率（80% 门槛），不会放宽条件。
+    #     （2026-09-30 修正：原先按 0 兜底会让使用率虚高一倍、门槛降到 40%，导致首轮大批多投。
+    #      对应的 fallback-prev-cost 配置项已删除。）
+    instance-lock-path: D:/oceanengine/data/reinvest.lock
     # ⚠️ 演练模式：true 只打印计划不真实追投；生产部署确认无误后改为 false
     dry-run: true
     # 单轮模式：true 时启动后执行一轮即退出（手动验证用，生产保持 false）
     run-once: false
 
+    # ==================== 追投阈值回调（webhook） ====================
+    # 某订单「当日」追投次数或金额达到阈值时，向下游 POST 一次 JSON（用于触发另一个程序）。
+    # 只通知、不改变追投行为：阈值低于上面的日上限时，通知之后订单仍会继续被追投。
+    # 计数口径与资金护栏一致：PENDING/DONE/UNKNOWN 计入，FAILED 不计。
+    # 同一订单同一天只发一次；已通知记录落盘，重启不会重复发、停服期间漏发的会在下一轮补上。
+    # dry-run=true 时不发送（演练不触发下游程序）。
+    webhook:
+      # ⚠️ 已启用。url 为空会导致启动失败（启动自检会拦下来）
+      enabled: true
+      # 下游地址（影刀 iPaaS 回调），必须 http:// 或 https:// 开头
+      url: "https://api.yingdao.com/api/tool/ipaas/webhook/callback/1000943879933181952"
+      # 当日追投次数阈值（达到即触发，含等于）
+      count-threshold: 5
+      # 当日追投金额阈值（元，达到即触发，含等于）
+      amount-threshold: 1000
+      # 单次请求超时（毫秒）。发送失败不重试，下一轮（约 10 分钟后）自动重试。
+      timeout-ms: 5000
+      # 已通知流水（JSONL）。必须绝对路径，否则重启后读不到，会把当天已达标订单再发一遍。
+      notify-log-path: D:/oceanengine/data/reinvest-webhook.jsonl
+      # 可选：对方要求鉴权时加自定义请求头，例如
+      #   headers:
+      #     Authorization: Bearer xxxxxxxx
+      headers: {}
+
+  # ==================== 每日追投明细表（日报） ====================
+  # 每日 00:01 把「前一日」的追投流水按订单聚合成一张表，读 .xls 模板填数据后另存到
+  #   {output-dir}/{yyyy-MM}追投日报/{yyyy-MM-dd}追投明细表.xls
+  # 全部参数都可在这里（或目标机 config/application.yml）改，改完 restart-service.cmd 即可，
+  # 不需要重新打包。
+  report:
+    # 是否启用日报。false 时既不定时生成也不补生成（@Scheduled 无法被配置关掉，由代码内判断拦截）
+    enabled: true
+    # 生成时机。Spring 6 段 cron：秒 分 时 日 月 周。默认 00:01:00。
+    # ⚠️ 必须写合法的 6 段表达式，留空或写错会导致启动失败（启动自检会先拦下来）。
+    cron: "0 1 0 * * ?"
+    # .xls 模板：读它、填数据、另存。表头与样式原样保留（数据从第 2 行开始写）。
+    # ⚠️ 模板缺失不会导致启动失败（不连累追投），只在生成报表时报错并写日志。
+    template-path: D:/oceanengine/data/currentreport/每日追投明细表模板.xls
+    # 报表根目录；其下按 folder-pattern 再分「月份文件夹」，不存在会自动创建
+    output-dir: D:/oceanengine/data
+    folder-pattern: "{month}追投日报"          # {month}=yyyy-MM → 2026-09追投日报
+    file-name-pattern: "{date}追投明细表.xls"   # {date}=yyyy-MM-dd → 2026-09-23追投明细表.xls
+    # 「时间」列写什么格式
+    date-pattern: yyyy-MM-dd
+
+    # ==================== 已结束达标订单 sheet（2026-09-30 新增） ====================
+    # 在主表之外多生成一个 sheet，列出「当天新结束（投放完成 FINISHED）且 ROI 达标」的订单。
+    #
+    # ⚠️ 与主表不同，这个 sheet 需要查接口（遍历 账户 × 状态 = 6×1 = 6 次列表请求，不含翻页），
+    #    在 00:01 与追投轮次并发，有限流风险。拉取失败只让该 sheet 留空 + 打日志，不会阻塞主表。
+    #
+    # 接口没有「结束时间」字段，所以「当天结束」是用底表对比出来的：
+    #   每天拉一次「近 N 天创建 + 结束态 + ROI 达标」的全量 → 与底表对比，多出来的就是新增 → 覆盖底表。
+    finished-orders-enabled: true
+    # 新 sheet 名称（Excel 限制 ≤31 字符，不能含 [ ] : * ? / \）
+    finished-orders-sheet-name: 已结束达标订单
+    # 七天底表（覆盖式 JSONL）。⚠️ 必须绝对路径：相对路径会随工作目录漂移，
+    # 重启后读不到 → 所有订单都会被当成「新增」灌进 sheet。
+    finished-orders-store-path: D:/oceanengine/data/report-finished-orders.jsonl
+    # 回看窗口（天）：拉取「创建时间近 N 天」的结束态订单。
+    # ⚠️ 接口只能按创建时间过滤，所以创建超过 N 天才结束的订单会漏掉。
+    finished-orders-lookback-days: 7
+    # 视为「已结束」的订单状态（FINISHED 投放完成 / FROZEN 投放终止 / OVER 投放结束）。
+    # ⚠️ 这是列表，外部配置会整体替换而不是合并，要改就写全。
+    # 2026-10-04 起默认只抓 FINISHED（投放完成）。
+    finished-orders-statuses:
+      - FINISHED
+
+    # 哪些状态计入报表。保守口径：PENDING（已落盘待调用）/DONE（成功）/UNKNOWN（超时，可能已生效）
+    # 都算，与资金护栏一致，避免「实际花了钱但报表里没有」。FAILED（接口明确失败）不计入。
+    # ⚠️ 这是列表，外部配置会整体替换而不是合并。
+    include-statuses:
+      - PENDING
+      - DONE
+      - UNKNOWN
+    # 账户 ID → 投放账户名，用于填「投放账户」列。
+    # 写在这里是为了让报表生成不依赖任何外部接口；没配到的账户会回退显示账户 ID，
+    # 并在日志里列出来提醒补配。新增账户时记得同时在这里加一行。
+    advertiser-names:
+      1779106144470100: 婴童【青少年-商品】
+      1778533513439244: 婴童【儿童-商品】
+      1776098375039040: 官方【青少年-商品】
+      1771298760893511: 官方【孕产-商品】
+      1795656569312393: 官方【婴童-商品】
+      1823379540880396: 官方【母婴商品】
+    # 启动时若「昨日报表」不存在则补生成一次（进程在 00:01 时不在就会漏一天）。
+    # 注意只补「昨天」这一天，更早的缺口不追。
+    catch-up-on-start: true
+    # 置 true 时启动立即生成一次报表，用于部署后不等 00:01 就验证；验证完改回 false。
+    # 可选 run-now-date: 2026-09-23 指定生成哪一天，不填默认「昨天」。
+    run-now: false
+
 logging:
   level:
-    com.example.oceanengine: INFO
+    com.aolandai.oceanengine: INFO
+  # 业务日志落盘。。
+  # 目录不存在时 logback 会自动创建。
+  file:
+    name: D:/oceanengine/logs/application.log
+  logback:
+    rollingpolicy:
+      # 按天 + 按大小滚动，保留最近 30 个归档文件，总量上限 2000MB
+      file-name-pattern: D:/oceanengine/logs/application.%d{yyyy-MM-dd}.%i.log
+      max-file-size: 100MB
+      max-history: 30
+      total-size-cap: 2000MB
