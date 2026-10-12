@@ -112,6 +112,11 @@ public class FinishedOrderFetcher {
                             advertiserId,
                             o.getAwemeInfo() == null ? null : o.getAwemeInfo().getAwemeName(),
                             o.getAwemeInfo() == null ? null : o.getAwemeInfo().getAwemeShowId(),
+                            // ⚠️ 复建建单要的字段：
+                            //    aweme_id 取【列表】结构的 aweme_info.aweme_id（数值 UID）
+                            //    productId 复用 productIdOf（已处理 product_info 为 null）
+                            o.getAwemeInfo() == null ? null : o.getAwemeInfo().getAwemeId(),
+                            productId,
                             roi,
                             o.getStatus() == null ? null : o.getStatus().getValue(),
                             o.getOrderCreateTime(),

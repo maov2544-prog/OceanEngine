@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -251,6 +252,153 @@ class DailyReinvestReportServiceTest {
             assertThat(text(sheet, 2, 0)).isEqualTo("7690526648109645861");
             assertThat(text(sheet, 2, 3)).isEqualTo("官方【母婴商品】");
             assertThat(number(sheet, 2, 4)).isEqualTo(1.81);
+        }
+    }
+
+    @Test
+    void finishedOrdersSheetWritesRebuildStatusAndNewOrderIdInSixthAndSeventhColumns() throws Exception {
+        ReinvestReportProperties props = props(tempDir);
+        FinishedOrderTracker tracker = mock(FinishedOrderTracker.class);
+        when(tracker.collectNewlyFinished(DATE)).thenReturn(List.of(
+                finished(7690526648109645860L, 1779106144470100L, "小明优选", "xm_yx_001",
+                        2.35, "FINISHED"),
+                finished(7690526648109645861L, 1823379540880396L, "母婴严选", "my_yx_003",
+                        1.81, "OVER")));
+
+        // 只复建第一单（第二单没复建成功 → 第 6/7 列留空）
+        SuixintuiRebuildService rebuildService = mock(SuixintuiRebuildService.class);
+        when(rebuildService.rebuild(anyList()))
+                .thenReturn(Map.of(7690526648109645860L, RebuildResult.rebuilt(8888888888888888888L)));
+
+        DailyReinvestReportService service =
+                new DailyReinvestReportService(props, store(SEED), tracker, rebuildService);
+        DailyReinvestReportService.Result result = service.generate(DATE);
+
+        try (Workbook workbook = open(result.file())) {
+            Sheet sheet = workbook.getSheet("已结束达标订单");
+            assertThat(sheet).isNotNull();
+
+            // 表头第 6/7 列（index 5/6）
+            assertThat(text(sheet, 0, 5)).isEqualTo("复建状态");
+            assertThat(text(sheet, 0, 6)).isEqualTo("复建订单ID");
+
+            // 第 1 单已复建 → 状态「已复建」+ 新订单号；两者都必须是文本单元格
+            assertThat(text(sheet, 1, 5)).isEqualTo("已复建");
+            assertThat(sheet.getRow(1).getCell(5).getCellType()).isEqualTo(CellType.STRING);
+            assertThat(text(sheet, 1, 6)).isEqualTo("8888888888888888888");
+            assertThat(sheet.getRow(1).getCell(6).getCellType()).isEqualTo(CellType.STRING);
+
+            // 第 2 单没复建 → 两列都为空字符串（不是 null，保持结构稳定）
+            assertThat(text(sheet, 2, 5)).isEmpty();
+            assertThat(text(sheet, 2, 6)).isEmpty();
+
+            // 列宽也按需求设了（第 6 列 12*256，第 7 列 22*256）
+            assertThat(sheet.getColumnWidth(5)).isEqualTo(12 * 256);
+            assertThat(sheet.getColumnWidth(6)).isEqualTo(22 * 256);
+        }
+    }
+
+    @Test
+    void finishedOrdersSheetWritesFiveRebuildStatusesAndConflictOrderId() throws Exception {
+        ReinvestReportProperties props = props(tempDir);
+        FinishedOrderTracker tracker = mock(FinishedOrderTracker.class);
+        // 5 单，各对应一种 F 列取值
+        when(tracker.collectNewlyFinished(DATE)).thenReturn(List.of(
+                finished(7000000000000000001L, 1779106144470100L, "A", "a", 2.0, "FINISHED"),
+                finished(7000000000000000002L, 1779106144470100L, "B", "b", 2.0, "FINISHED"),
+                finished(7000000000000000003L, 1779106144470100L, "C", "c", 2.0, "FINISHED"),
+                finished(7000000000000000004L, 1779106144470100L, "D", "d", 2.0, "FINISHED"),
+                finished(7000000000000000005L, 1779106144470100L, "E", "e", 2.0, "FINISHED")));
+
+        Map<Long, RebuildResult> statusMap = new LinkedHashMap<>();
+        statusMap.put(7000000000000000001L, RebuildResult.rebuilt(5555555555555555555L));
+        statusMap.put(7000000000000000002L, RebuildResult.skippedInflight(6666666666666666666L));
+        statusMap.put(7000000000000000003L, RebuildResult.skippedLimit());
+        statusMap.put(7000000000000000004L, RebuildResult.skippedInvalid());
+        statusMap.put(7000000000000000005L, RebuildResult.failed());
+
+        SuixintuiRebuildService rebuildService = mock(SuixintuiRebuildService.class);
+        when(rebuildService.rebuild(anyList())).thenReturn(statusMap);
+
+        DailyReinvestReportService service =
+                new DailyReinvestReportService(props, store(SEED), tracker, rebuildService);
+        DailyReinvestReportService.Result result = service.generate(DATE);
+
+        try (Workbook workbook = open(result.file())) {
+            Sheet sheet = workbook.getSheet("已结束达标订单");
+
+            // 已复建 → G 列写新订单号（文本）
+            assertThat(text(sheet, 1, 5)).isEqualTo("已复建");
+            assertThat(text(sheet, 1, 6)).isEqualTo("5555555555555555555");
+            assertThat(sheet.getRow(1).getCell(6).getCellType()).isEqualTo(CellType.STRING);
+
+            // 已有投放中订单 → G 列写【冲突订单号】（文本）
+            assertThat(text(sheet, 2, 5)).isEqualTo("已有投放中订单");
+            assertThat(text(sheet, 2, 6)).isEqualTo("6666666666666666666");
+            assertThat(sheet.getRow(2).getCell(6).getCellType()).isEqualTo(CellType.STRING);
+
+            // 超每日上限 / 参数缺失 / 复建失败 → G 列一律留空
+            assertThat(text(sheet, 3, 5)).isEqualTo("超每日上限");
+            assertThat(text(sheet, 3, 6)).isEmpty();
+            assertThat(text(sheet, 4, 5)).isEqualTo("参数缺失");
+            assertThat(text(sheet, 4, 6)).isEmpty();
+            assertThat(text(sheet, 5, 5)).isEqualTo("复建失败");
+            assertThat(text(sheet, 5, 6)).isEmpty();
+        }
+    }
+
+    @Test
+    void rebuildColumnBlankButReportStillOkWhenRebuildServiceMissing() throws Exception {
+        ReinvestReportProperties props = props(tempDir);
+        FinishedOrderTracker tracker = mock(FinishedOrderTracker.class);
+        when(tracker.collectNewlyFinished(DATE)).thenReturn(List.of(
+                finished(7690526648109645860L, 1779106144470100L, "小明优选", "xm_yx_001",
+                        2.35, "FINISHED")));
+
+        // 老构造器（3 参）没有复建服务 → 复建状态/复建订单ID 两列必须留空，且不影响主报表
+        DailyReinvestReportService service =
+                new DailyReinvestReportService(props, store(SEED), tracker);
+        DailyReinvestReportService.Result result = service.generate(DATE);
+
+        assertThat(result.orderCount()).isEqualTo(5);
+        assertThat(result.totalAmount()).isEqualTo(1_200L);
+        assertThat(result.newlyFinishedCount()).isEqualTo(1);
+
+        try (Workbook workbook = open(result.file())) {
+            Sheet sheet = workbook.getSheet("已结束达标订单");
+            assertThat(text(sheet, 0, 5)).isEqualTo("复建状态");
+            assertThat(text(sheet, 0, 6)).isEqualTo("复建订单ID");
+            assertThat(text(sheet, 1, 5)).isEmpty();
+            assertThat(text(sheet, 1, 6)).isEmpty();
+        }
+    }
+
+    @Test
+    void rebuildFailureDoesNotBreakTheReport() throws Exception {
+        ReinvestReportProperties props = props(tempDir);
+        FinishedOrderTracker tracker = mock(FinishedOrderTracker.class);
+        when(tracker.collectNewlyFinished(DATE)).thenReturn(List.of(
+                finished(7690526648109645860L, 1779106144470100L, "小明优选", "xm_yx_001",
+                        2.35, "FINISHED")));
+
+        // 复建整体炸了 → 日报主表照常产出，复建状态列留空
+        SuixintuiRebuildService rebuildService = mock(SuixintuiRebuildService.class);
+        when(rebuildService.rebuild(anyList()))
+                .thenThrow(new RuntimeException("模拟复建链路炸了"));
+
+        DailyReinvestReportService service =
+                new DailyReinvestReportService(props, store(SEED), tracker, rebuildService);
+        DailyReinvestReportService.Result result = service.generate(DATE);
+
+        assertThat(result.orderCount()).isEqualTo(5);
+        assertThat(result.totalAmount()).isEqualTo(1_200L);
+        assertThat(Files.exists(result.file())).isTrue();
+
+        try (Workbook workbook = open(result.file())) {
+            Sheet sheet = workbook.getSheet("已结束达标订单");
+            assertThat(sheet).isNotNull();
+            assertThat(text(sheet, 1, 5)).isEmpty();
+            assertThat(text(sheet, 1, 6)).isEmpty();
         }
     }
 

@@ -155,4 +155,42 @@ class FinishedOrderStoreTest {
         assertThat(store.size()).isZero();
         assertThat(store.getSkippedBadLines()).isZero();
     }
+
+    // ==================== 复建字段（awemeId / productId） ====================
+
+    @Test
+    @DisplayName("★ 新增的 awemeId / productId 能落盘并读回（复建建单要用）")
+    void newRebuildFieldsSurviveRestart() throws IOException {
+        FinishedOrder order = new FinishedOrder(111L, 999L, "抖音名", "show_111",
+                7446391238175474745L, 3700528515221946525L, 2.0, "FINISHED",
+                "2026-10-11 14:29", "2026-10-12 00:01:00");
+        new FinishedOrderStore(storeFile()).replaceAll(List.of(order));
+
+        FinishedOrder loaded = new FinishedOrderStore(storeFile()).find(111L);
+
+        assertThat(loaded).isNotNull();
+        assertThat(loaded.getAwemeId()).isEqualTo(7446391238175474745L);
+        assertThat(loaded.getProductId()).isEqualTo(3700528515221946525L);
+    }
+
+    @Test
+    @DisplayName("★ 向后兼容：旧底表没有 awemeId / productId 这两个 key，读回应为 null（不报错）")
+    void oldRecordsWithoutNewFieldsReadAsNull() throws IOException {
+        // 模拟「改造前」写下的底表：只有旧字段
+        Files.writeString(storeFile(),
+                "{\"orderId\":111,\"advertiserId\":999,\"awemeName\":\"抖音名\","
+                        + "\"awemeShowId\":\"show_111\",\"roi\":2.0,\"status\":\"FINISHED\","
+                        + "\"orderCreateTime\":\"2026-10-11 14:29\","
+                        + "\"lastSeenAt\":\"2026-10-12 00:01:00\"}\n",
+                StandardCharsets.UTF_8);
+
+        FinishedOrderStore store = new FinishedOrderStore(storeFile());
+
+        assertThat(store.getSkippedBadLines()).isZero();
+        FinishedOrder loaded = store.find(111L);
+        assertThat(loaded).isNotNull();
+        assertThat(loaded.getAwemeShowId()).isEqualTo("show_111");
+        assertThat(loaded.getAwemeId()).isNull();
+        assertThat(loaded.getProductId()).isNull();
+    }
 }

@@ -1,6 +1,7 @@
 package com.aolandai.oceanengine.launcher;
 
 import com.aolandai.oceanengine.report.ReinvestReportProperties;
+import com.aolandai.oceanengine.report.SuixintuiRebuildProperties;
 import com.aolandai.oceanengine.scheduler.ReinvestRoundResult;
 import com.aolandai.oceanengine.scheduler.SuixintuiReinvestProperties;
 import com.aolandai.oceanengine.scheduler.SuixintuiReinvestScheduler;
@@ -29,7 +30,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  */
 @SpringBootApplication(scanBasePackages = "com.aolandai.oceanengine")
 @EnableScheduling
-@EnableConfigurationProperties({SuixintuiReinvestProperties.class, ReinvestReportProperties.class})
+@EnableConfigurationProperties({SuixintuiReinvestProperties.class, ReinvestReportProperties.class,
+        SuixintuiRebuildProperties.class})
 public class ReinvestApplication implements ApplicationRunner {
 
     private final SuixintuiReinvestProperties props;

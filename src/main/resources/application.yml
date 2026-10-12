@@ -59,15 +59,13 @@ suixintui:
     delivery-time: 24
     # 筛选阈值：净成交 ROI ≥ min-roi
     min-roi: 1.8
-    # 筛选阈值：整体消耗下限（元）。低于这个值的订单直接不追投。
-    # 理由：消耗太少还没跑出有效数据；且它们的分支②((2×C_now−C_prev)/B) 容易因增量占比虚高而误触发。
-    # 边界：正好等于下限保留；消耗为 null 排除。
-    min-stat-cost: 100
+    # 筛选阈值：整体消耗下限（元），低于它的订单不追投（正好等于下限保留，0 = 不过滤）
+    min-stat-cost: 0
     # 筛选阈值（两分支 OR，任一成立即达标；ROI 条件两者都必须满足）：
     #   ① 使用率     = 整体消耗 / 投放总金额                            ≥ 本值
     #   ② 增强使用率 = (2×本轮整体消耗 − 上一轮整体消耗) / 投放总金额   ≥ 本值
     # 分支②的数据来自 consume-snapshot-path 的快照（上一轮的值）。
-    min-budget-used-ratio: 0.8
+    min-budget-used-ratio: 0.75
     # ==================== 第二条路径（ROAS，2026-10-05） ====================
     # 与上面的「使用率」判定是 OR 关系（任一成立即纳入，不替代）。启用后额外纳入：
     #   消耗 / 投放总金额       ≥ roas-min-usage-ratio      （跑量：钱花得差不多了）
@@ -88,11 +86,11 @@ suixintui:
     # 资金安全护栏：PENDING/UNKNOWN 按“可能已经支出”占用额度
     # 单账户每日金额上限已按档次配置，见上面的 advertiser-tiers，此处不再有全局值
     #单订单每天金额上限
-    max-amount-per-order-per-day: 1200
+    max-amount-per-order-per-day: 3000
     #单轮总金额上限（所有账户共享；一轮用满后，本轮后续账户的候选都会被拒）
     max-amount-per-round: 30000
     #单订单每天追投次数上限
-    max-reinvest-count-per-order-per-day: 6
+    max-reinvest-count-per-order-per-day: 15
     # 对同一个订单（orderId），两次追投之间至少间隔 10 分钟，未满 10 分钟的本轮跳过
     cooldown-minutes: 10
     # 幂等流水文件（JSONL，重启自动恢复）。必须用绝对路径：用相对路径会随工作目录漂移，
@@ -112,7 +110,7 @@ suixintui:
     #      对应的 fallback-prev-cost 配置项已删除。）
     instance-lock-path: D:/oceanengine/data/reinvest.lock
     # ⚠️ 演练模式：true 只打印计划不真实追投；生产部署确认无误后改为 false
-    dry-run: true
+    dry-run: false
     # 单轮模式：true 时启动后执行一轮即退出（手动验证用，生产保持 false）
     run-once: false
 
@@ -139,6 +137,19 @@ suixintui:
       #   headers:
       #     Authorization: Bearer xxxxxxxx
       headers: {}
+
+  # ==================== 已结束达标订单自动复建 ====================
+  # 日报抓完「已结束且 ROI 达标」的订单后，按原单参数照抄重新建一个随心推订单。
+  # ⚠️ 没有独立开关：跟随上面 reinvest 的 dry-run —— dry-run=true 只组装请求体打印、不真建；
+  #    dry-run=false 才真建。也【没有】金额上限（老板明确要求只限「每日单数」）。
+  # 幂等：按原订单号去重，一个原单最多真复建一次，永不复建第二次（dry-run 记录不算，只留档）。
+  rebuild:
+    # 每日最多【真复建】的订单数。超出上限的订单【跳过】（不是终止本轮），日志留痕。
+    # 计数只算「真建成功」的记录，dry-run 记录不计入。
+    max-orders-per-day: 10
+    # 复建幂等流水（JSONL）。必须绝对路径，否则重启后读不到已复建记录，会把订单再复建一遍（重复花钱）。
+    # ⚠️ 该文件损坏会拒绝启动：流水丢了会导致重复复建，停摆的代价小于乱花钱的代价。
+    record-store-path: D:/oceanengine/data/reinvest-rebuild-records.jsonl
 
   # ==================== 每日追投明细表（日报） ====================
   # 每日 00:01 把「前一日」的追投流水按订单聚合成一张表，读 .xls 模板填数据后另存到

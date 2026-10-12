@@ -25,6 +25,22 @@ public class FinishedOrder {
     /** 抖音号（aweme_info.aweme_show_id） */
     private String awemeShowId;
 
+    /**
+     * 达人的<b>数值 UID</b>（{@code aweme_info.aweme_id}）—— 复建建单要的就是它。
+     *
+     * <p>⚠️ 与 {@link #awemeShowId}（抖音号字符串）不是一回事：建单接口的 {@code aweme_id}
+     * 收的是数值 UID，传抖音号字符串会被拒。</p>
+     */
+    private Long awemeId;
+
+    /**
+     * 商品 ID（{@code product_info.product_id}，列表结构口径）—— 复建建单要的字段。
+     *
+     * <p>⚠️ 注意口径：<b>列表</b>结构里叫 {@code product_info.product_id}，
+     * <b>详情</b>结构里叫 {@code product_info.id}；本字段来自列表。</p>
+     */
+    private Long productId;
+
     /** 订单结束时的 ROI（按配置口径：净成交或整体支付） */
     private Double roi;
 
@@ -50,6 +66,19 @@ public class FinishedOrder {
         this.status = status;
         this.orderCreateTime = orderCreateTime;
         this.lastSeenAt = lastSeenAt;
+    }
+
+    /**
+     * 全字段构造器（含复建所需的 {@code awemeId} / {@code productId}）。
+     *
+     * <p>与 8 参构造器并存：旧调用方不必改，新调用方（复建相关）用这个把建单字段一起带上。</p>
+     */
+    public FinishedOrder(Long orderId, Long advertiserId, String awemeName, String awemeShowId,
+                         Long awemeId, Long productId, Double roi, String status,
+                         String orderCreateTime, String lastSeenAt) {
+        this(orderId, advertiserId, awemeName, awemeShowId, roi, status, orderCreateTime, lastSeenAt);
+        this.awemeId = awemeId;
+        this.productId = productId;
     }
 
     public Long getOrderId() {
@@ -82,6 +111,22 @@ public class FinishedOrder {
 
     public void setAwemeShowId(String awemeShowId) {
         this.awemeShowId = awemeShowId;
+    }
+
+    public Long getAwemeId() {
+        return awemeId;
+    }
+
+    public void setAwemeId(Long awemeId) {
+        this.awemeId = awemeId;
+    }
+
+    public Long getProductId() {
+        return productId;
+    }
+
+    public void setProductId(Long productId) {
+        this.productId = productId;
     }
 
     public Double getRoi() {
@@ -121,6 +166,8 @@ public class FinishedOrder {
         return "FinishedOrder{orderId=" + orderId
                 + ", advertiserId=" + advertiserId
                 + ", awemeShowId='" + awemeShowId + '\''
+                + ", awemeId=" + awemeId
+                + ", productId=" + productId
                 + ", roi=" + roi
                 + ", status='" + status + '\'' + '}';
     }

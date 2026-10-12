@@ -60,9 +60,21 @@ public class DailyReinvestReportService {
      */
     private final FinishedOrderTracker finishedOrderTracker;
 
-    /** 单测 / 手工构造用：不采集「已结束达标订单」 */
+    /**
+     * 「已结束达标订单」复建编排。允许为 {@code null}（单测 / 手工构造时）——
+     * 为 null 时跳过复建（sheet 的「复建状态」列留空）。
+     */
+    private final SuixintuiRebuildService rebuildService;
+
+    /** 单测 / 手工构造用：不采集「已结束达标订单」、不复建 */
     public DailyReinvestReportService(ReinvestReportProperties props, ReinvestRecordStore store) {
-        this(props, store, null);
+        this(props, store, null, null);
+    }
+
+    /** 单测 / 手工构造用：采集「已结束达标订单」但<b>不复建</b>（复建状态列留空） */
+    public DailyReinvestReportService(ReinvestReportProperties props, ReinvestRecordStore store,
+                                      FinishedOrderTracker finishedOrderTracker) {
+        this(props, store, finishedOrderTracker, null);
     }
 
     /**
@@ -70,10 +82,12 @@ public class DailyReinvestReportService {
      */
     @org.springframework.beans.factory.annotation.Autowired
     public DailyReinvestReportService(ReinvestReportProperties props, ReinvestRecordStore store,
-                                      FinishedOrderTracker finishedOrderTracker) {
+                                      FinishedOrderTracker finishedOrderTracker,
+                                      SuixintuiRebuildService rebuildService) {
         this.props = props;
         this.store = store;
         this.finishedOrderTracker = finishedOrderTracker;
+        this.rebuildService = rebuildService;
     }
 
     /** 生成结果，用于日志与调用方判断 */
@@ -103,11 +117,33 @@ public class DailyReinvestReportService {
 
         List<FinishedOrder> newlyFinished = collectNewlyFinished(date);
 
+        // 复建：对本日新结束且达标的订单执行自动复建（尽力而为，失败绝不影响主报表）。
+        // 「复建状态」/「复建订单ID」两列据此填充（文案/订单号由 RebuildResult 决定）。
+        Map<Long, RebuildResult> rebuildStatus = rebuild(newlyFinished);
+
         Path out = props.resolveOutputFile(date);
-        writeWorkbook(date, rows, totalAmount, newlyFinished, out);
+        writeWorkbook(date, rows, totalAmount, newlyFinished, rebuildStatus, out);
 
         warnUnmappedAccounts(rows);
         return new Result(date, out, rows.size(), totalCount, totalAmount, newlyFinished.size());
+    }
+
+    /**
+     * 执行复建（尽力而为）。复建是旁路功能，任何异常都只打日志、返回空状态，
+     * <b>绝不允许影响日报主表生成</b> —— 与 {@link #collectNewlyFinished} 同一哲学。
+     *
+     * @return 原订单号 → 复建结果（含「已复建」文案与复建出的新订单号）
+     */
+    private Map<Long, RebuildResult> rebuild(List<FinishedOrder> newlyFinished) {
+        if (rebuildService == null || newlyFinished == null || newlyFinished.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            return rebuildService.rebuild(newlyFinished);
+        } catch (Exception e) {
+            System.out.println("[日报] 复建异常（跳过，主报表照常）：" + e);
+            return Map.of();
+        }
     }
 
     /**
@@ -195,7 +231,8 @@ public class DailyReinvestReportService {
     // ==================== 写 xls ====================
 
     private void writeWorkbook(LocalDate date, List<OrderRow> rows, long totalAmount,
-                               List<FinishedOrder> newlyFinished, Path out)
+                               List<FinishedOrder> newlyFinished, Map<Long, RebuildResult> rebuildStatus,
+                               Path out)
             throws IOException {
         Path template = props.getTemplatePath();
         if (template == null || !Files.exists(template)) {
@@ -245,7 +282,7 @@ public class DailyReinvestReportService {
             // 只要功能启用就建 sheet（哪怕没有数据、只有表头），保持文件结构稳定，
             // 下游不必判断「sheet 存不存在」。
             if (props.isFinishedOrdersEnabled()) {
-                writeFinishedSheet(workbook, newlyFinished);
+                writeFinishedSheet(workbook, newlyFinished, rebuildStatus);
             }
 
             try (OutputStream os = Files.newOutputStream(out)) {
@@ -257,10 +294,19 @@ public class DailyReinvestReportService {
     /**
      * 写「已结束达标订单」sheet。
      *
-     * <p>列：订单ID / 抖音名 / 抖音号 / 投放账户 / roi。
-     * 订单ID 与抖音号用<b>文本格式</b>（{@code @}），否则 Excel 按数值处理会丢精度。</p>
+     * <p>列：订单ID / 抖音名 / 抖音号 / 投放账户 / roi / 复建状态 / 复建订单ID。
+     * 订单ID、抖音号、<b>复建订单ID</b> 都用<b>文本格式</b>（{@code @}）——
+     * 19 位数字若按数值处理会被 Excel 丢精度。</p>
+     *
+     * <p>第 6/7 列（F/G）语义由 {@link RebuildResult} 决定：
+     * F 列文案（已复建 / 已有投放中订单 / 超每日上限 / 参数缺失 / 复建失败），
+     * G 列只在「已复建」（新订单号）与「在投冲突」（冲突订单号）时写号，其余留空。
+     * 不在 {@code rebuildStatus} 里的订单两列都留空。</p>
+     *
+     * @param rebuildStatus 原订单号 → 复建结果
      */
-    private void writeFinishedSheet(Workbook workbook, List<FinishedOrder> orders) {
+    private void writeFinishedSheet(Workbook workbook, List<FinishedOrder> orders,
+                                    Map<Long, RebuildResult> rebuildStatus) {
         String name = safeSheetName(workbook, props.getFinishedOrdersSheetName());
         Sheet sheet = workbook.createSheet(name);
 
@@ -269,7 +315,7 @@ public class DailyReinvestReportService {
         CellStyle numberStyle = buildDataStyle(workbook, false);
 
         Row header = sheet.createRow(0);
-        String[] columns = {"订单ID", "抖音名", "抖音号", "投放账户", "roi"};
+        String[] columns = {"订单ID", "抖音名", "抖音号", "投放账户", "roi", "复建状态", "复建订单ID"};
         for (int i = 0; i < columns.length; i++) {
             setText(header, i, columns[i], headerStyle);
         }
@@ -282,6 +328,12 @@ public class DailyReinvestReportService {
             setText(sheetRow, 2, order.getAwemeShowId(), textStyle);
             setText(sheetRow, 3, advertiserName(order.getAdvertiserId()), textStyle);
             setDouble(sheetRow, 4, order.getRoi(), numberStyle);
+            // 第 6/7 列：复建状态 + 复建订单ID。业务判断都收敛在 RebuildResult 里，这里只取值。
+            // ⚠️ 复建订单ID 与订单ID 一样必须写成文本，否则 19 位数字被 Excel 丢精度。
+            // G 列语义：成功→新订单号；在投冲突→冲突订单号；其它失败→留空（orderIdLabel() 返回 null）。
+            RebuildResult rebuilt = rebuildStatus == null ? null : rebuildStatus.get(order.getOrderId());
+            setText(sheetRow, 5, rebuilt == null ? null : rebuilt.statusLabel(), textStyle);
+            setText(sheetRow, 6, rebuilt == null ? null : rebuilt.orderIdLabel(), textStyle);
             rowIndex++;
         }
 
@@ -290,6 +342,8 @@ public class DailyReinvestReportService {
         sheet.setColumnWidth(2, 18 * 256);
         sheet.setColumnWidth(3, 24 * 256);
         sheet.setColumnWidth(4, 10 * 256);
+        sheet.setColumnWidth(5, 12 * 256);
+        sheet.setColumnWidth(6, 22 * 256);
 
         if (orders.isEmpty()) {
             System.out.println("[日报] 「" + name + "」sheet 本次没有新增订单（只写表头）。");
